@@ -525,7 +525,7 @@ function drawChart(box, points, currency) {
     box.innerHTML = `<p class="muted small" style="padding-top:8px">${pts.length ? 'از وقتی این کالا خوانده شده قیمتش عوض نشده؛ با اولین تغییر نمودار ساخته می‌شود.' : ''}</p>`;
     return;
   }
-  const W = 640, H = 180, padL = 8, padR = 64, padT = 10, padB = 24;
+  const W = Math.max(280, Math.round(box.clientWidth || 640)), H = 180, padL = 8, padR = 64, padT = 10, padB = 24;
   const t0 = new Date(pts[0].effective_at).getTime();
   const t1 = Date.now();
   const vals = pts.map((p) => inCurrency(p.regular_price, currency));
@@ -547,7 +547,7 @@ function drawChart(box, points, currency) {
   const area = `${d}V${H - padB}H${x(t0)}Z`;
   const ticks = [lo + pad, (lo + hi) / 2, hi - pad];
   const nf = new Intl.NumberFormat('fa-IR', { notation: 'compact', maximumFractionDigits: 1 });
-  box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="نمودار قیمت از ${esc(dateTime(pts[0].effective_at))} تا امروز؛ جزئیات در جدول تاریخچه">
+  box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="نمودار قیمت از ${esc(dateTime(pts[0].effective_at))} تا امروز؛ جزئیات در جدول تاریخچه">
       ${ticks.map((v) => `<line class="grid-line" x1="${padL}" x2="${W - padR}" y1="${y(v)}" y2="${y(v)}"/><text class="axis-text" x="${W - padR + 8}" y="${y(v) + 4}" text-anchor="start">${nf.format(v)}</text>`).join('')}
       <path class="area" d="${area}"/><path class="series" d="${d}" vector-effect="non-scaling-stroke"/>
       <line id="cross" class="grid-line" y1="${padT}" y2="${H - padB}" stroke-dasharray="3 3" style="display:none"/>

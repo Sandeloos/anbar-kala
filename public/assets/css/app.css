@@ -458,7 +458,7 @@ a.list-item:hover { background: #fafbfe; }
 .price-hero .big small { font-size: 15px; font-weight: 600; color: var(--muted); }
 .price-hero .sub { font-size: 13.5px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .chart { position: relative; margin-top: 8px; }
-.chart svg { width: 100%; height: 180px; overflow: visible; }
+.chart svg { width: 100%; height: 180px; overflow: visible; direction: ltr; }
 .chart .grid-line { stroke: var(--line-2); stroke-width: 1; }
 .chart .axis-text { font-size: 11px; fill: var(--muted); font-family: var(--font); }
 .chart .series { fill: none; stroke: var(--blue); stroke-width: 2; }
