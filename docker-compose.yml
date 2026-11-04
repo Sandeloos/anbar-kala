@@ -1,0 +1,18 @@
+# docker compose up -d   (put the values in a .env file next to this one)
+services:
+  anbar:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"   # put nginx/Caddy with HTTPS in front
+    environment:
+      APP_SECRET: ${APP_SECRET:?set APP_SECRET (long random string; encrypts the WooCommerce keys)}
+      PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL, e.g. https://anbar.example.ir}
+      TRUST_PROXY: "1"
+      MANAGER_USERNAME: ${MANAGER_USERNAME:-}
+      MANAGER_PASSWORD: ${MANAGER_PASSWORD:-}
+      MANAGER_NAME: ${MANAGER_NAME:-مدیر}
+    volumes:
+      - anbar-data:/data
+volumes:
+  anbar-data:

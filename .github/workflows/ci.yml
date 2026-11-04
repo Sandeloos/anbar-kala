@@ -1,0 +1,36 @@
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Tehran
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run check
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t anbar .
+      - name: Smoke test
+        run: |
+          docker run -d --name anbar -p 8080:8080 -e APP_SECRET=ci-secret -e PUBLIC_URL=http://localhost:8080 \
+            -e MANAGER_USERNAME=ci -e MANAGER_PASSWORD=ci-password-1 anbar
+          for i in $(seq 1 30); do curl -fs localhost:8080/health && break; sleep 1; done
+          curl -fs localhost:8080/health
+          curl -fs localhost:8080/ | grep -q 'انبار'
+          docker logs anbar
