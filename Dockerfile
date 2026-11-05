@@ -1,5 +1,5 @@
 # Anbar: one Node server (API + app + background sync). The SQLite database lives in /data.
-FROM node:22-bookworm-slim
+FROM node:25-bookworm-slim
 
 ENV NODE_ENV=production \
     TZ=Asia/Tehran \
