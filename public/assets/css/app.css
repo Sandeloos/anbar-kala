@@ -127,7 +127,7 @@ kbd { font-family: var(--font); font-size: 11px; padding: 1px 6px; border-radius
 
 /* ---------- Forms ---------- */
 .form { display: grid; gap: 16px; }
-.form-row { display: grid; gap: 16px; }
+.form-row { display: grid; gap: 16px; align-items: start; }
 .field { display: grid; gap: 6px; min-width: 0; }
 .field > label, .field-label { font-size: 13px; font-weight: 600; color: var(--ink-2); }
 .field input, .field select, .field textarea, .input {
@@ -213,6 +213,10 @@ kbd { font-family: var(--font); font-size: 11px; padding: 1px 6px; border-radius
 .main { min-width: 0; padding: 18px var(--gutter) 80px; outline: none; }
 .view { display: grid; gap: 16px; align-content: start; max-width: 1280px; margin-inline: auto; }
 .view[aria-busy="true"] { opacity: .65; transition: opacity .2s .15s; }
+/* Grid and flex children may shrink below their content (wide segmented controls scroll instead of widening the page) */
+.page { display: grid; gap: 16px; align-content: start; min-width: 0; }
+.view > *, .page > *, .card > *, .toolbar > *, .grid > * { min-width: 0; }
+.seg { min-width: 0; }
 
 @media (min-width: 1024px) {
   .shell { display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr); min-height: 100vh; }
@@ -292,7 +296,7 @@ a.metric:hover { box-shadow: var(--shadow); transform: translateY(-2px); }
 .badge { display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px; border-radius: 99px; font-size: 12px; font-weight: 600; line-height: 1.9; white-space: nowrap; background: var(--line-2); color: var(--ink-2); }
 .badge .icon { width: 13px; height: 13px; }
 .badge-blue { background: var(--blue-soft); color: var(--blue-ink); }
-.badge-green { background: var(--green-soft); color: var(--green); }
+.badge-green { background: var(--green-soft); color: #0f6b3a; }
 .badge-red { background: var(--red-soft); color: var(--red); }
 .badge-amber { background: var(--amber-soft); color: var(--amber); }
 .badge-orange { background: var(--orange-soft); color: var(--orange-ink); }
@@ -323,7 +327,7 @@ a.metric:hover { box-shadow: var(--shadow); transform: translateY(-2px); }
 .seg::-webkit-scrollbar { display: none; }
 .seg button { flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 12px; border-radius: 9px; font-size: 13px; font-weight: 600; color: var(--ink-2); white-space: nowrap; }
 .seg button small { color: var(--muted); font-weight: 600; }
-.seg button[aria-pressed="true"] { background: var(--surface); color: var(--navy); box-shadow: 0 1px 4px rgba(17, 26, 74, .12); }
+.seg button[aria-pressed="true"], .seg button[aria-checked="true"] { background: var(--surface); color: var(--navy); box-shadow: 0 1px 4px rgba(17, 26, 74, .12); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 12px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface); font-size: 13px; font-weight: 600; color: var(--ink-2); }
 .chip:hover { border-color: #c9d1e6; }
@@ -535,3 +539,75 @@ dialog::backdrop { background: rgba(10, 16, 48, .42); backdrop-filter: blur(2px)
   .chip { flex: none; }
   .toolbar > select.input { flex: 1 1 auto; }
 }
+
+/* ==========================================================================
+   Phase 2: pickers, order entry, receiving, stock, import
+   ========================================================================== */
+.icon.spin { animation: spin 1s linear infinite; }
+
+/* Search-as-you-type picker */
+.picker { position: relative; }
+.picker .search { flex: none; width: 100%; }
+.picker-list {
+  position: absolute; inset-inline: 0; top: calc(100% + 4px); z-index: 40; max-height: 360px; overflow-y: auto; padding: 6px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow-lg);
+}
+.picker-list [role="option"] { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 10px; cursor: pointer; }
+.picker-list [role="option"][aria-selected="true"] { background: var(--navy-soft); }
+.picker-list .grow { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.pk-name { font-weight: 600; font-size: 14px; }
+.pk-sub { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; font-size: 12.5px; color: var(--muted); }
+.pk-none { padding: 12px; color: var(--muted); font-size: 14px; text-align: center; }
+
+/* Order entry */
+.order-line { padding: 14px 18px; border-top: 1px solid var(--line-2); display: grid; gap: 10px; }
+.ol-main { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.ol-fields { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+.ol-fields .field input { min-height: 40px; }
+.ol-price { display: grid; gap: 2px; align-content: start; }
+.ol-manual { padding: 10px; border-radius: 12px; background: var(--orange-soft); }
+@media (min-width: 900px) {
+  .ol-fields { grid-template-columns: 110px 110px 170px minmax(0, 1.3fr) minmax(0, 1fr); }
+  .ol-manual { grid-template-columns: 260px minmax(0, 1fr) minmax(0, 1fr); }
+}
+.order-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.field .chips { margin-top: 4px; }
+.field .chip { min-height: 30px; font-size: 12.5px; }
+
+/* Receiving */
+.company-tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+.company-tab {
+  flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 14px 8px 18px; border-radius: 14px; background: var(--surface);
+  border: 1px solid var(--line-2); text-align: start; box-shadow: var(--shadow-sm);
+}
+.company-tab strong { display: block; font-size: 14px; }
+.company-tab small { display: block; font-size: 12px; color: var(--muted); }
+.company-tab[aria-pressed="true"] { border-color: var(--navy); box-shadow: 0 0 0 2px var(--navy-soft); }
+.logo { width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center; font-weight: 800; font-size: 18px; color: #fff; flex: none; }
+.logo.sm { width: 34px; height: 34px; border-radius: 10px; font-size: 13px; }
+.table tr.group-row td { background: var(--surface-2); font-size: 12.5px; font-weight: 700; color: var(--muted); }
+.outcomes { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; }
+.outcome { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid var(--line); border-radius: 14px; cursor: pointer; }
+.outcome input { margin-top: 4px; accent-color: var(--navy); width: 18px; height: 18px; }
+.outcome strong { display: block; font-size: 14px; }
+.outcome small { display: block; font-size: 12.5px; color: var(--muted); line-height: 1.8; }
+.outcome:has(input:checked) { border-color: var(--navy); background: var(--navy-soft); }
+fieldset.field { border: 0; padding: 0; margin: 0; display: grid; gap: 6px; }
+.picks { display: grid; gap: 8px; padding: 12px; border-radius: 14px; background: var(--surface-2); }
+.pick-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--surface); font-size: 13.5px; }
+.pick-row .grow { flex: 1; min-width: 0; }
+
+/* Import */
+.dropzone {
+  display: grid; justify-items: center; gap: 6px; padding: 28px 16px; border: 2px dashed #c6cfe6; border-radius: 18px; text-align: center; cursor: pointer;
+  background: var(--surface-2); color: var(--ink-2);
+}
+.dropzone .icon { width: 30px; height: 30px; color: var(--navy); }
+.dropzone:hover, .dropzone.is-over { border-color: var(--navy); background: var(--navy-soft); }
+.dropzone:focus-within { box-shadow: var(--focus); }
+.map-grid { display: grid; gap: 12px; }
+@media (min-width: 760px) { .map-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.unmatched { display: grid; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--line-2); }
+.unmatched:last-child { border-bottom: 0; }
+.unmatched .linked { color: var(--green); }
+@media (min-width: 900px) { .unmatched { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; } }

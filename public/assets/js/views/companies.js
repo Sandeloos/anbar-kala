@@ -307,11 +307,11 @@ async function renderOne(view, ctx, id) {
     });
   }
 
-  await load();
+  // Listen before the first load: a quick sync may finish while the page is still loading
   const reload = debounce(() => load().catch(() => {}), 400);
   const offs = [
     ctx.subscribe('sync', (e) => {
-      if (e.companyId !== id) return;
+      if (e.companyId !== id || !data) return;
       if (e.state === 'progress') {
         progress = e;
         const bar = $('.progress i', view);
@@ -326,5 +326,8 @@ async function renderOne(view, ctx, id) {
     }),
     ctx.subscribe('company', (e) => { if (e.id === id) reload(); })
   ];
-  return () => offs.forEach((f) => f());
+  await load();
+  // Safety net if the "finished" event was missed (reconnect, slow page): re-check while it shows as running
+  const watch = setInterval(() => { if (data && data.company.sync_state === 'running' && !document.hidden) reload(); }, 4000);
+  return () => { offs.forEach((f) => f()); clearInterval(watch); };
 }

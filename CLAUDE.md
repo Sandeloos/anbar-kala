@@ -27,8 +27,11 @@ decision taken with them: `docs/decisions.md` (Persian) — read it before chang
   field-level `audit.diff(before, after, labels)`. The activity log is never edited.
 - API: cookie session + `X-Anbar: 1` header on every non-GET; `config: { manager: true }` marks
   manager-only routes; responses use snake_case.
-- Live updates: `events.emit('products' | 'sync' | 'company' | 'activity', data)` → `/api/events` (SSE)
-  → `ctx.subscribe(type, fn)` in views.
+- Live updates: `events.emit('products' | 'sync' | 'company' | 'activity' | 'orders' | 'stock' | 'listings', data)`
+  → `/api/events` (SSE) → `ctx.subscribe(type, fn)` in views. The router gives every page a fresh
+  container, so a late reload of a page you left cannot draw over the current one.
+- Stock is a ledger (`stock_moves`); never update or delete rows, write an opposite row.
+- Order lines freeze the site price at the order time; change it only through `setLinePrice` (reason required).
 
 ## Structure
 - `server/app.js` builds the app; `routes/*` (one file per area, `validate.js` = zod pieces with
@@ -42,3 +45,6 @@ decision taken with them: `docs/decisions.md` (Persian) — read it before chang
   served as a zip from `/api/plugin/anbar-connector.zip`. `tests/php/plugin-harness.php` runs it
   under PHP with WordPress stand-ins; `tests/unit/plugin.test.js` feeds its output to the server.
 - `tools/mock-woo.js` — fake WooCommerce shop for the demo and the tests.
+- Phase 2: `lib/orders.js` (orders, receiving, stock rules), `lib/importer.js`, `lib/jalali.js` (server) and
+  `public/assets/js/jalali.js` (browser, same algorithm), `public/assets/js/picker.js` (listing/product search),
+  views `orders.js`, `receiving.js`, `stock.js`, `listings.js`, `import.js`.

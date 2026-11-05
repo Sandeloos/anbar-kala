@@ -47,6 +47,7 @@ async function demo(port) {
   }
   await app.listen({ host: '127.0.0.1', port });
   for (const c of db.all('SELECT id FROM companies')) await app.ctx.sync.fullSync(c.id);
+  seedOrders(app);
   // Prices keep moving so the live updates are visible
   setInterval(() => {
     const shop = shops[Math.floor(Math.random() * shops.length)];
@@ -55,6 +56,65 @@ async function demo(port) {
   console.log(`\nDemo ready: http://127.0.0.1:${port}  (demo / demo-1234 manager, ali / demo-1234 admin)`);
   for (const s of shops) console.log(`  shop "${s.name}" ${s.url}`);
   return app;
+}
+
+/**
+ * Demo only: pretend the shops were connected three days ago (so yesterday's orders have a
+ * site price), add listings (some "25 of a 100-pack") and yesterday's orders, and receive a few
+ * of them with different outcomes.
+ */
+function seedOrders(app) {
+  const { db, orders } = app.ctx;
+  const { nowIso, searchKey } = require('./lib/util');
+  db.run("UPDATE price_history SET effective_at = ? WHERE source = 'import'", new Date(Date.now() - 3 * 864e5).toISOString());
+  const manager = db.get("SELECT * FROM users WHERE username = 'demo'");
+  const ali = db.get("SELECT * FROM users WHERE username = 'ali'");
+  const as = (u) => ({ user: { id: u.id, name: u.name }, ip: '127.0.0.1' });
+  // Units per pack as suggested from the names, confirmed
+  db.run('UPDATE products SET configured_at = ?, units_guessed = 0 WHERE units_guessed = 1 AND id % 3 <> 0', nowIso());
+  // Spread over the three companies
+  const big = db.all("SELECT * FROM products WHERE type = 'variation' AND units_per_pack = 100 AND removed_at IS NULL ORDER BY (id * 7919) % 1009 LIMIT 30");
+  const simple = db.all("SELECT * FROM products WHERE type <> 'variation' AND removed_at IS NULL ORDER BY (id * 7919) % 1009 LIMIT 40");
+  const now = nowIso();
+  const listings = [];
+  big.forEach((p, i) => {
+    const code = `DKPC-${7000 + i}`;
+    const title = `${p.parent_name || p.name} - بسته ۲۵ عددی`;
+    const id = Number(db.run(`INSERT INTO listings (platform_id, product_id, code, title, units, search_text, created_at, updated_at) VALUES (1, ?, ?, ?, 25, ?, ?, ?)`,
+      p.id, code, title, searchKey(`${code} ${title} ${p.name}`), now, now).lastInsertRowid);
+    listings.push({ id, units: 25, product: p });
+  });
+  simple.slice(0, 20).forEach((p, i) => {
+    const code = `BSL-${300 + i}`;
+    const id = Number(db.run(`INSERT INTO listings (platform_id, product_id, code, title, units, search_text, created_at, updated_at) VALUES (2, ?, ?, ?, ?, ?, ?, ?)`,
+      p.id, code, p.name, p.units_per_pack, searchKey(`${code} ${p.name}`), now, now).lastInsertRowid);
+    listings.push({ id, units: p.units_per_pack, product: p });
+  });
+  let n = 0;
+  const { tehranDay, wall } = require('./lib/jalali');
+  const [yy, ym, yd] = tehranDay(new Date(Date.now() - 864e5).toISOString()).date.split('-').map(Number);
+  const yesterday = (h, m) => wall(yy, ym, yd, h, m);
+  const lineIds = [];
+  for (let i = 0; i < 24; i++) {
+    const a = listings[(i * 7) % listings.length];
+    const b = i % 4 === 0 ? listings[(i * 7 + 3) % listings.length] : null;
+    const lines = [{ listing_id: a.id, qty: 1 + (i % 3 === 0 ? 1 : 0), platform_price: 100000 + i * 2500 }];
+    if (b && b.id !== a.id) lines.push({ listing_id: b.id, qty: 1 });
+    try {
+      const id = orders.createOrder(as(i % 2 ? ali : manager), { platform_id: i % 3 === 2 ? 2 : 1, order_number: String(243180000 + i * 37), ordered_at: yesterday(9 + (i % 12), (i * 13) % 60), lines });
+      lineIds.push(...db.all('SELECT id FROM order_lines WHERE order_id = ?', id).map((r) => r.id));
+      n++;
+    } catch (err) { console.warn('demo order skipped:', err.message); }
+  }
+  // Some arrived already: fine, too many (a 100-pack for a 25 listing), and one filled from that surplus
+  const lineOf = (id) => db.get('SELECT * FROM order_lines WHERE id = ?', id);
+  const tryReceive = (id, body) => { try { orders.receive(as(ali), id, body); } catch (err) { console.warn('demo receive skipped:', err.message); } };
+  lineIds.slice(0, 5).forEach((id) => tryReceive(id, { outcome: 'ok' }));
+  const partial = lineIds.map(lineOf).find((l) => l.units_per_sale === 25 && l.units_total === 25 && l.status === 'pending');
+  if (partial) tryReceive(partial.id, { outcome: 'excess', arrived_units: 100 });
+  const sameProduct = partial && lineIds.map(lineOf).find((l) => l.product_id === partial.product_id && l.status === 'pending');
+  if (sameProduct) tryReceive(sameProduct.id, { outcome: 'short', arrived_units: 0, rest: 'stock' });
+  console.log(`  demo: ${listings.length} listings, ${n} orders from yesterday`);
 }
 
 (async () => {

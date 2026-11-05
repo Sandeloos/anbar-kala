@@ -25,15 +25,16 @@ export async function render(view, ctx) {
     view.innerHTML = `
       <div class="page-head">
         <div><h1>${esc(greeting(ctx.me.name))}</h1><p>خلاصه‌ی وضعیت شرکت‌ها و قیمت‌ها؛ این صفحه خودش به‌روز می‌شود.</p></div>
-        <div class="page-actions"><a class="btn" href="#/companies/new">${icon('plus')}شرکت جدید</a></div>
+        <div class="page-actions"><a class="btn" href="#/receiving">${icon('truck')}دریافت روزانه</a><a class="btn btn-primary" href="#/orders/new">${icon('plus')}سفارش جدید</a></div>
       </div>
       ${errors.length ? `<div class="callout callout-err" role="alert">${icon('alert')}<div><strong>اتصال ${fa(errors.length)} شرکت مشکل دارد:</strong> ${errors.map((c) => `<a class="link" href="#/companies/${c.id}">${esc(c.name)}</a>`).join('، ')}. قیمت‌های این شرکت‌ها تا رفع مشکل به‌روز نمی‌شود.</div></div>` : ''}
       <div class="metrics">
-        <a class="metric" href="#/products">${icon('box')}<strong>${fa(d.products.total)}</strong><span>کالای فعال در همه‌ی سایت‌ها</span></a>
-        <a class="metric tone-orange" href="#/products?setup=todo">${icon('edit')}<strong>${fa(d.products.needs_setup)}</strong><span>کالای منتظر تنظیم (تعداد در بسته)</span></a>
+        <a class="metric" href="#/orders?period=today">${icon('cart')}<strong>${fa(d.ops.orders_today)}</strong><span>سفارش امروز (${fa(d.ops.lines_today)} قلم)</span></a>
+        <a class="metric tone-orange" href="#/receiving">${icon('truck')}<strong>${fa(d.ops.receiving_due)}</strong><span>ردیف منتظر دریافت از روزهای قبل</span></a>
         <a class="metric tone-green" href="#/changes">${icon('trend')}<strong>${fa(d.changes_24h.price)}</strong><span>تغییر قیمت در ۲۴ ساعت گذشته</span></a>
-        <a class="metric tone-red" href="#/products?stock=outofstock">${icon('alert')}<strong>${fa(d.products.out_of_stock)}</strong><span>کالای ناموجود در سایت‌ها</span></a>
+        <a class="metric tone-red" href="#/stock">${icon('layers')}<strong>${fa(d.ops.consigned_units)}</strong><span>عدد کالای امانی شرکت‌ها در انبار ما</span></a>
       </div>
+      ${d.products.needs_setup ? `<div class="callout callout-warn">${icon('edit')}<span>${fa(d.products.needs_setup)} کالا هنوز «تعداد در بسته»اش تأیید نشده. <a class="link" href="#/products?setup=guessed">بررسی و تأیید</a></span></div>` : ''}
       <div class="grid grid-main">
         <section class="card card-flush" aria-labelledby="dash-changes">
           <div class="card-head"><div><h2 id="dash-changes">آخرین تغییرات قیمت</h2><p>قیمت قبل از تخفیف، همان‌طور که روی سایت شرکت است</p></div><a class="btn btn-sm btn-ghost" href="#/changes">همه</a></div>
@@ -74,7 +75,9 @@ export async function render(view, ctx) {
     ctx.subscribe('products', (e) => { if (e.priceChanges || e.created || e.removed) reload(); }),
     ctx.subscribe('sync', (e) => { if (e.state !== 'progress') reload(); }),
     ctx.subscribe('company', reload),
-    ctx.subscribe('activity', reload)
+    ctx.subscribe('activity', reload),
+    ctx.subscribe('orders', reload),
+    ctx.subscribe('stock', reload)
   ];
   return () => offs.forEach((off) => off());
 }

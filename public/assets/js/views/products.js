@@ -424,6 +424,14 @@ async function renderOne(view, ctx, id) {
               <div class="form-actions"><button class="btn btn-primary" type="submit">${p.configured_at ? 'ذخیره' : 'ذخیره و تأیید'}</button></div>
             </form>
           </section>
+          <section class="card" aria-labelledby="h-lst"><div class="card-head"><h2 id="h-lst">آگهی‌ها و موجودی انبار</h2><a class="btn btn-sm btn-ghost" href="#/listings?q=${encodeURIComponent(p.name)}">آگهی‌ها</a></div>
+            ${d.listings.length ? `<div class="list">${d.listings.map((l) => `<div class="list-item" style="padding-inline:0"><span class="grow"><span class="title">${esc(l.title || p.name)}</span>
+              <span class="sub"><span class="badge badge-blue">${esc(l.platform_name)}</span>${l.code ? `<span class="ltr">${esc(l.code)}</span>` : ''}${l.active ? '' : '<span class="badge">غیرفعال</span>'}</span></span>
+              <span class="small">${l.units === p.units_per_pack ? 'کل بسته' : `${fa(l.units)} از ${fa(p.units_per_pack)} عدد`}</span></div>`).join('')}</div>`
+              : '<p class="small muted">هنوز آگهی‌ای به این کالا وصل نیست.</p>'}
+            ${d.stock.length ? `<dl class="kv" style="margin-top:8px">${d.stock.map((s) => `<div><dt>${esc(s.warehouse_name)} · ${s.owner_company_id ? `مال ${esc(s.owner_name)}` : 'خودمان'}</dt><dd>${fa(s.units)} عدد</dd></div>`).join('')}</dl>`
+              : '<p class="small muted" style="margin-top:8px">در انبارهای ما موجودی ندارد.</p>'}
+          </section>
           ${d.siblings.length ? `<section class="card" aria-labelledby="h-sib"><div class="card-head"><h2 id="h-sib">حالت‌های دیگر همین کالا</h2></div>
             <div class="list">${d.siblings.map((s) => `<a class="list-item" href="#/products/${s.id}" style="padding-inline:0"><span class="grow"><span class="title">${esc(s.attributes || s.name)}</span>
               <span class="sub">${stockBadge(s)}<span>${fa(s.units_per_pack)} عدد در بسته</span></span></span><span class="price">${money(s.regular_price, p.currency)}</span></a>`).join('')}</div></section>` : ''}

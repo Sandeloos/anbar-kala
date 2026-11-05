@@ -24,6 +24,20 @@
   noticed; the plugin makes it near-instant), `observed_at` = when we learned it, `source`.
 - `sync_runs`, `users`, `sessions`, `audit_log`, `warehouses`, `settings`.
 
+## Orders, receiving and stock (phase 2)
+- `platforms` (Digikala, Basalam, site, …) and `listings`: a platform item → a company product and
+  `units` per sale (a "25 pieces" listing of a 100-piece product).
+- `orders` / `order_lines`: each line freezes the site price at the order time (`site_price`,
+  `site_price_at`, source, `price_uncertain`) and `settle_unit_price` = site_price × units_per_sale ÷
+  units_per_pack (or a manual value with a reason). `lib/orders.js` holds the rules.
+- Receiving (`lib/orders.js` `receive`): outcome ok / excess / short / wrong / cancelled →
+  `arrivals` (what physically came and where it went) and `stock_moves`; the line records
+  `units_from_company`, `units_from_stock`, `units_cancelled`. Undo writes reversal moves.
+- `stock_moves` is the ledger: stock = SUM(units) per (product, warehouse, owner_company_id; NULL = ours).
+  Never below zero; `ship_out` of company-owned units carries `value` for the monthly settlement.
+- Import (`lib/importer.js`, `routes/imports.js`): xlsx/csv → column mapping (guessed from Persian
+  headers, saved per platform) → preview → listings for unknown codes → orders.
+
 ## Sync
 - **full**: every product page (100 per request, `_fields` trimmed) + variations of variable products
   (4 parents in parallel); items the site no longer lists get `removed_at`.

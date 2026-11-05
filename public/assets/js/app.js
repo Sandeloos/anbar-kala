@@ -4,14 +4,18 @@
  * Each section is a module in views/ exporting render(view, ctx, params)
  * that may return a cleanup function.
  */
-import { get, post, onAuthProblem } from './api.js';
+import { get, post, onAuthProblem, newSession } from './api.js';
 import { $, $$, esc, icon, fa, toast, busy, fieldErrors, showError, formValues, confirm, ROLES, initials, colorFor, debounce, money, latin } from './ui.js';
 import { connect, disconnect, subscribe } from './live.js';
 
 const SECTIONS = [
   { group: 'کار روزانه', path: 'dashboard', label: 'داشبورد', icon: 'grid', load: () => import('./views/dashboard.js') },
-  { group: 'کار روزانه', path: 'products', label: 'کالاها', icon: 'box', count: 'needs_setup', countTitle: 'کالای تنظیم‌نشده', load: () => import('./views/products.js') },
+  { group: 'کار روزانه', path: 'orders', label: 'سفارش‌ها', icon: 'cart', load: () => import('./views/orders.js') },
+  { group: 'کار روزانه', path: 'receiving', label: 'دریافت روزانه', icon: 'truck', count: 'receiving_due', countTitle: 'ردیف منتظر دریافت', load: () => import('./views/receiving.js') },
+  { group: 'کار روزانه', path: 'stock', label: 'موجودی انبار', icon: 'layers', load: () => import('./views/stock.js') },
   { group: 'کار روزانه', path: 'changes', label: 'تغییرات قیمت', icon: 'trend', count: 'price_changes_24h', countTitle: 'تغییر در ۲۴ ساعت', load: () => import('./views/changes.js') },
+  { group: 'تعریف‌ها', path: 'products', label: 'کالاها', icon: 'box', count: 'needs_setup', countTitle: 'کالای تنظیم‌نشده', load: () => import('./views/products.js') },
+  { group: 'تعریف‌ها', path: 'listings', label: 'آگهی‌ها', icon: 'link', load: () => import('./views/listings.js') },
   { group: 'تعریف‌ها', path: 'companies', label: 'شرکت‌ها', icon: 'building', count: 'sync_errors', danger: true, countTitle: 'خطای اتصال', load: () => import('./views/companies.js') },
   { group: 'تعریف‌ها', path: 'warehouses', label: 'انبارها', icon: 'warehouse', load: () => import('./views/warehouses.js') },
   { group: 'مدیریت', path: 'users', label: 'کاربران', icon: 'users', manager: true, load: () => import('./views/users.js') },
@@ -110,6 +114,7 @@ $('#first-password-form').addEventListener('submit', async (e) => {
 $$('[data-logout]').forEach((b) => b.addEventListener('click', async () => {
   if (ctx.me && !ctx.me.must_change_password && !(await confirm({ title: 'از انبار خارج می‌شوید؟', yes: 'خروج' }))) return;
   await post('/auth/logout').catch(() => {});
+  newSession();
   if (cleanup) { cleanup(); cleanup = null; }
   $('#view').innerHTML = '';
   history.replaceState(null, '', location.pathname);
@@ -147,6 +152,7 @@ function renderNav(active) {
 }
 
 async function refreshCounts() {
+  if (!ctx.me || ctx.me.must_change_password || $('#shell').hidden) return;
   try {
     ctx.counts = await get('/counts');
     renderNav(parseHash().path);
@@ -155,6 +161,7 @@ async function refreshCounts() {
 const refreshCountsSoon = debounce(refreshCounts, 1500);
 
 function enter(user) {
+  newSession();
   ctx.me = user;
   if (user.must_change_password) { showFirstPassword(); return; }
   show('shell');
@@ -178,10 +185,14 @@ async function route() {
   const { path, params, query } = parseHash();
   ctx.query = query;
   const section = SECTIONS.find((s) => s.path === path);
-  const view = $('#view');
+  const root = $('#view');
   if ($('#sheet').open) $('#sheet').close();
   if (cleanup) { cleanup(); cleanup = null; }
-  view.onclick = view.onchange = view.oninput = view.onsubmit = view.onkeydown = null;
+  // Every page draws into its own new container. A page we have left may still finish a
+  // request or a scheduled reload; it then writes into its detached container, never over this one.
+  const view = document.createElement('div');
+  view.className = 'page';
+  root.replaceChildren(view);
   if (!section || !allowed(section)) {
     renderNav('');
     view.innerHTML = `<div class="empty">${icon('alert')}<strong>این بخش پیدا نشد</strong><p>ممکن است نشانی اشتباه باشد یا دسترسی این بخش را نداشته باشید.</p><a class="btn btn-primary" href="#/dashboard">داشبورد</a></div>`;
@@ -189,7 +200,7 @@ async function route() {
   }
   renderNav(section.path);
   const token = ++renderToken;
-  view.setAttribute('aria-busy', 'true');
+  root.setAttribute('aria-busy', 'true');
   document.title = `${section.label} | انبار`;
   try {
     const mod = await section.load();
@@ -203,7 +214,7 @@ async function route() {
     view.innerHTML = `<div class="empty">${icon('alert')}<strong>نمایش این بخش انجام نشد</strong><p>${esc(err.message || '')}</p><button class="btn btn-primary" type="button" data-retry>تلاش دوباره</button></div>`;
     $('[data-retry]', view).addEventListener('click', route);
   } finally {
-    if (token === renderToken) view.setAttribute('aria-busy', 'false');
+    if (token === renderToken) root.setAttribute('aria-busy', 'false');
   }
   if (!params.length) window.scrollTo(0, 0);
 }
@@ -211,6 +222,7 @@ window.addEventListener('hashchange', route);
 
 // Counters follow what happens anywhere (other admins, background sync)
 subscribe('products', refreshCountsSoon);
+subscribe('orders', refreshCountsSoon);
 subscribe('sync', (d) => { if (d.state !== 'progress') refreshCountsSoon(); });
 
 /* ------------------------------------------------------------ quick search (Ctrl+K) */

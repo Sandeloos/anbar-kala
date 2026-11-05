@@ -92,7 +92,12 @@ module.exports = async function productRoutes(app) {
       ? db.all(`SELECT id, name, attributes, regular_price, stock_status, units_per_pack FROM products
                 WHERE company_id = ? AND parent_woo_id = ? AND id <> ? AND removed_at IS NULL ORDER BY woo_id`, p.company_id, p.parent_woo_id, p.id)
       : [];
-    return { product: p, history, activity, siblings };
+    const listings = db.all(`SELECT l.id, l.code, l.title, l.units, l.active, pl.name AS platform_name FROM listings l JOIN platforms pl ON pl.id = l.platform_id
+                             WHERE l.product_id = ? ORDER BY l.active DESC, pl.sort`, p.id);
+    const stock = db.all(`SELECT m.warehouse_id, m.owner_company_id, SUM(m.units) AS units, w.name AS warehouse_name, oc.name AS owner_name
+                          FROM stock_moves m JOIN warehouses w ON w.id = m.warehouse_id LEFT JOIN companies oc ON oc.id = m.owner_company_id
+                          WHERE m.product_id = ? GROUP BY m.warehouse_id, m.owner_company_id HAVING SUM(m.units) <> 0`, p.id);
+    return { product: p, history, activity, siblings, listings, stock };
   }
 
   app.get('/products/:id', async (req) => detail(req.params.id));

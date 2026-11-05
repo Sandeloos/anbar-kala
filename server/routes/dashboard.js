@@ -1,5 +1,6 @@
 'use strict';
 /** Numbers and lists for the dashboard. */
+const { dayStart, tehranDay } = require('../lib/jalali');
 
 module.exports = async function dashboardRoutes(app) {
   const { db, sync } = app.ctx;
@@ -30,7 +31,18 @@ module.exports = async function dashboardRoutes(app) {
       WHERE h.price_changed = 1 AND h.source <> 'import' ORDER BY h.observed_at DESC, h.id DESC LIMIT 12`);
     const activity = db.all(`SELECT a.id, a.action, a.entity, a.entity_id, a.summary, a.created_at, u.name AS user_name FROM audit_log a
       LEFT JOIN users u ON u.id = a.user_id WHERE a.action <> 'login' ORDER BY a.id DESC LIMIT 8`);
+    const todayStart = dayStart(tehranDay(new Date().toISOString()).date);
+    const ops = {
+      orders_today: db.get('SELECT COUNT(*) AS n FROM orders WHERE ordered_at >= ? AND cancelled_at IS NULL', todayStart).n,
+      lines_today: db.get('SELECT COUNT(*) AS n FROM order_lines l JOIN orders o ON o.id = l.order_id WHERE o.ordered_at >= ? AND o.cancelled_at IS NULL', todayStart).n,
+      receiving_due: db.get(`SELECT COUNT(*) AS n FROM order_lines l JOIN orders o ON o.id = l.order_id
+                             WHERE l.status = 'pending' AND o.cancelled_at IS NULL AND o.ordered_at < ?`, todayStart).n,
+      received_today: db.get("SELECT COUNT(*) AS n FROM order_lines WHERE status <> 'pending' AND received_at >= ?", todayStart).n,
+      consigned_units: db.get('SELECT COALESCE(SUM(units), 0) AS n FROM stock_moves WHERE owner_company_id IS NOT NULL').n,
+      own_units: db.get('SELECT COALESCE(SUM(units), 0) AS n FROM stock_moves WHERE owner_company_id IS NULL').n
+    };
     return {
+      ops,
       products: {
         total: p.total || 0, out_of_stock: p.out_of_stock || 0, needs_setup: p.needs_setup || 0,
         multi_packs: p.multi_packs || 0, manual_prices: p.manual_prices || 0
@@ -46,7 +58,10 @@ module.exports = async function dashboardRoutes(app) {
     return {
       needs_setup: db.get('SELECT COUNT(*) AS n FROM products WHERE removed_at IS NULL AND configured_at IS NULL').n,
       sync_errors: db.get("SELECT COUNT(*) AS n FROM companies WHERE active = 1 AND sync_state = 'error'").n,
-      price_changes_24h: db.get("SELECT COUNT(*) AS n FROM price_history WHERE price_changed = 1 AND source <> 'import' AND observed_at >= ?", day).n
+      price_changes_24h: db.get("SELECT COUNT(*) AS n FROM price_history WHERE price_changed = 1 AND source <> 'import' AND observed_at >= ?", day).n,
+      // Lines of orders placed before today that nobody has received yet
+      receiving_due: db.get(`SELECT COUNT(*) AS n FROM order_lines l JOIN orders o ON o.id = l.order_id
+                             WHERE l.status = 'pending' AND o.cancelled_at IS NULL AND o.ordered_at < ?`, dayStart(tehranDay(new Date().toISOString()).date)).n
     };
   });
 };

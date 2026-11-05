@@ -460,11 +460,16 @@ function createSync({ db, config, secrets, events, log, fetchImpl }) {
    * The site price of a product at a moment (ISO time). null when we had not
    * seen the product yet at that time.
    */
-  function priceAt(productId, at) {
-    const row = db.get(`SELECT id, regular_price, sale_price, stock_status, stock_quantity, source, effective_at, observed_at
-                        FROM price_history WHERE product_id = ? AND effective_at <= ? AND (price_changed = 1 OR source = 'import')
+  function priceAt(productId, at, { graceMs = 0 } = {}) {
+    const cols = 'id, regular_price, sale_price, stock_status, stock_quantity, source, effective_at, observed_at';
+    const row = db.get(`SELECT ${cols} FROM price_history WHERE product_id = ? AND effective_at <= ? AND (price_changed = 1 OR source = 'import')
                         ORDER BY effective_at DESC, id DESC LIMIT 1`, productId, at);
-    return row || null;
+    if (row || !graceMs) return row || null;
+    // Ordered shortly before we first read the product (or the time was typed to the minute):
+    // the first price we saw is the best evidence; the caller marks it uncertain
+    const first = db.get(`SELECT ${cols} FROM price_history WHERE product_id = ? ORDER BY effective_at, id LIMIT 1`, productId);
+    if (first && new Date(first.effective_at).getTime() - new Date(at).getTime() <= graceMs) return { ...first, before_first_seen: true };
+    return null;
   }
 
   return {

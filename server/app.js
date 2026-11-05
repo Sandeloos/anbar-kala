@@ -16,6 +16,7 @@ const { createEvents } = require('./lib/events');
 const { createSecrets } = require('./lib/secrets');
 const { createSettings } = require('./lib/settings');
 const { createSync } = require('./lib/sync');
+const { createOrders } = require('./lib/orders');
 const { createJobs } = require('./jobs');
 const { HttpError } = require('./lib/util');
 
@@ -44,8 +45,9 @@ async function buildApp(config, { logger, fetchImpl } = {}) {
   const settings = createSettings(db);
   const audit = createAudit(db, events);
   const sync = createSync({ db, config, secrets, events, log: app.log, fetchImpl });
+  const orders = createOrders({ db, sync, events, audit });
   const ctx = {
-    config, db, events, secrets, settings, audit, sync,
+    config, db, events, secrets, settings, audit, sync, orders,
     auth: createAuth({ db, config }),
     limit: createLimiter({ factor: config.relaxLimits ? 100 : 1 })
   };
@@ -84,7 +86,9 @@ async function buildApp(config, { logger, fetchImpl } = {}) {
     if (err instanceof HttpError || err.expose || (err.statusCode && err.statusCode < 500)) {
       const status = err.statusCode || 400;
       const message = err instanceof HttpError || err.expose ? err.message : 'درخواست معتبر نیست.';
-      return reply.code(status).send(Object.assign({ error: message }, err.fields ? { fields: err.fields } : {}));
+      const extra = {};
+      for (const k of ['fields', 'code', 'line', 'existing_id']) if (err[k] !== undefined && (k !== 'code' || typeof err[k] === 'string')) extra[k] = err[k];
+      return reply.code(status).send({ error: message, ...extra });
     }
     req.log.error({ err }, 'request failed');
     return reply.code(500).send({ error: 'خطای داخلی سرور؛ دوباره تلاش کنید.' });
@@ -122,7 +126,7 @@ async function buildApp(config, { logger, fetchImpl } = {}) {
       const managerOnly = req.routeOptions.config && req.routeOptions.config.manager;
       if (managerOnly && req.user.role !== 'manager') throw new HttpError(403, 'این بخش فقط برای مدیر است.');
     });
-    for (const r of ['auth', 'me', 'users', 'companies', 'warehouses', 'products', 'activity', 'dashboard', 'settings', 'events']) {
+    for (const r of ['auth', 'me', 'users', 'companies', 'warehouses', 'products', 'listings', 'orders', 'receiving', 'stock', 'imports', 'activity', 'dashboard', 'settings', 'events']) {
       await api.register(require(`./routes/${r}`));
     }
   }, { prefix: '/api' });
