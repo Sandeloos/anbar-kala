@@ -1,0 +1,20 @@
+# HTTPS in front of Anbar. Caddy gets and renews the certificate for DOMAIN by itself
+# (ports 80 and 443 must reach this server). See docs/deploy.md for the other options.
+# To get certificate notices by e-mail, add at the very top:
+#   {
+#   	email you@example.com
+#   }
+
+{$DOMAIN} {
+	encode zstd gzip
+	# Live updates (server-sent events) must not be buffered
+	reverse_proxy anbar:8080 {
+		flush_interval -1
+	}
+	header {
+		-Server
+	}
+	request_body {
+		max_size 25MB
+	}
+}

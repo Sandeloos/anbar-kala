@@ -1,9 +1,9 @@
 'use strict';
 /** Numbers and lists for the dashboard. */
-const { dayStart, tehranDay } = require('../lib/jalali');
+const { dayStart, tehranDay, monthOf, monthLabel } = require('../lib/jalali');
 
 module.exports = async function dashboardRoutes(app) {
-  const { db, sync } = app.ctx;
+  const { db, sync, statements } = app.ctx;
 
   app.get('/dashboard', async () => {
     const day = new Date(Date.now() - 864e5).toISOString();
@@ -40,10 +40,24 @@ module.exports = async function dashboardRoutes(app) {
       received_today: db.get("SELECT COUNT(*) AS n FROM order_lines WHERE status <> 'pending' AND received_at >= ?", todayStart).n,
       consigned_units: db.get('SELECT COALESCE(SUM(units), 0) AS n FROM stock_moves WHERE owner_company_id IS NOT NULL').n,
       own_units: db.get('SELECT COALESCE(SUM(units), 0) AS n FROM stock_moves WHERE owner_company_id IS NULL').n,
-      returns_waiting: db.get('SELECT COUNT(*) AS n FROM returns WHERE disposition IS NULL AND voided_at IS NULL').n
+      returns_waiting: db.get('SELECT COUNT(*) AS n FROM returns WHERE disposition IS NULL AND voided_at IS NULL').n,
+      tasks_open: db.get("SELECT COUNT(*) AS n FROM tasks WHERE status = 'open'").n
     };
+    // Orders per day for the last 14 Tehran days (the chart), and this month's amount per company
+    const days = [];
+    for (let i = 13; i >= 0; i--) {
+      const d = tehranDay(new Date(Date.now() - i * 864e5).toISOString()).date;
+      const start = dayStart(d);
+      const end = new Date(new Date(start).getTime() + 864e5).toISOString();
+      const r = db.get(`SELECT COUNT(DISTINCT o.id) AS orders, COUNT(l.id) AS lines FROM orders o LEFT JOIN order_lines l ON l.order_id = o.id
+                        WHERE o.cancelled_at IS NULL AND o.ordered_at >= ? AND o.ordered_at < ?`, start, end);
+      days.push({ date: d, start, orders: r.orders, lines: r.lines });
+    }
+    const month = monthOf(new Date().toISOString());
+    const accounts = db.all('SELECT id, name, currency FROM companies WHERE active = 1 ORDER BY name')
+      .map((c) => ({ ...c, month, month_label: monthLabel(month), total: statements.compute(c.id, month).totals.total }));
     return {
-      ops,
+      ops, days, accounts,
       products: {
         total: p.total || 0, out_of_stock: p.out_of_stock || 0, needs_setup: p.needs_setup || 0,
         multi_packs: p.multi_packs || 0, manual_prices: p.manual_prices || 0
@@ -61,6 +75,7 @@ module.exports = async function dashboardRoutes(app) {
       sync_errors: db.get("SELECT COUNT(*) AS n FROM companies WHERE active = 1 AND sync_state = 'error'").n,
       price_changes_24h: db.get("SELECT COUNT(*) AS n FROM price_history WHERE price_changed = 1 AND source <> 'import' AND observed_at >= ?", day).n,
       returns_waiting: db.get('SELECT COUNT(*) AS n FROM returns WHERE disposition IS NULL AND voided_at IS NULL').n,
+      tasks_open: db.get("SELECT COUNT(*) AS n FROM tasks WHERE status = 'open'").n,
       // Lines of orders placed before today that nobody has received yet
       receiving_due: db.get(`SELECT COUNT(*) AS n FROM order_lines l JOIN orders o ON o.id = l.order_id
                              WHERE l.status = 'pending' AND o.cancelled_at IS NULL AND o.ordered_at < ?`, dayStart(tehranDay(new Date().toISOString()).date)).n

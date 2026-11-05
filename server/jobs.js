@@ -14,7 +14,22 @@ function createJobs(ctx, log) {
   const { db, sync, settings } = ctx;
   let busy = false;
 
+  /** One backup a day, at night (Tehran), if the last one is older than 20 hours. */
+  function dailyBackup() {
+    const hour = Number(new Intl.DateTimeFormat('en', { timeZone: 'Asia/Tehran', hour: 'numeric', hourCycle: 'h23' }).format(new Date()));
+    if (hour < 2 || hour > 5) return;
+    const last = ctx.backups.list()[0];
+    if (last && Date.now() - new Date(last.at).getTime() < 20 * 3600e3) return;
+    try {
+      const b = ctx.backups.now(settings.get('backup_keep'));
+      log.info({ backup: b.name }, 'daily backup');
+    } catch (err) {
+      log.error({ err }, 'daily backup failed');
+    }
+  }
+
   async function tick() {
+    dailyBackup();
     if (busy) return;
     busy = true;
     try {

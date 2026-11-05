@@ -314,7 +314,7 @@ a.metric:hover { box-shadow: var(--shadow); transform: translateY(-2px); }
 .delta .icon { width: 14px; height: 14px; stroke-width: 2.4; }
 .delta-up { color: var(--red); }
 .delta-down { color: var(--green); }
-.strike { text-decoration: line-through; color: var(--muted-2); }
+.strike { text-decoration: line-through; color: var(--muted); }
 
 /* ---------- Toolbar, segmented, chips ---------- */
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
@@ -322,7 +322,7 @@ a.metric:hover { box-shadow: var(--shadow); transform: translateY(-2px); }
 .search .icon { position: absolute; inset-block-start: 50%; inset-inline-start: 12px; transform: translateY(-50%); width: 18px; height: 18px; color: var(--muted); pointer-events: none; }
 .search input { width: 100%; min-height: 42px; padding: 8px 40px 8px 12px; border-radius: 12px; border: 1px solid #d9deea; background: var(--surface); outline: none; }
 .search input:focus { border-color: #8fb0f0; box-shadow: var(--focus); }
-.toolbar select.input { width: auto; min-height: 42px; font-size: 14px; }
+.toolbar select.input { width: auto; min-width: 160px; min-height: 42px; font-size: 14px; }
 .seg { display: inline-flex; gap: 3px; padding: 3px; background: #e8ecf5; border-radius: 12px; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
 .seg::-webkit-scrollbar { display: none; }
 .seg button { flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 12px; border-radius: 9px; font-size: 13px; font-weight: 600; color: var(--ink-2); white-space: nowrap; }
@@ -635,3 +635,19 @@ fieldset.field { border: 0; padding: 0; margin: 0; display: grid; gap: 6px; }
   .table tr { break-inside: avoid; }
   a { color: inherit; text-decoration: none; }
 }
+
+/* ==========================================================================
+   Phase 4: inbox, dashboard chart, system
+   ========================================================================== */
+.task { display: grid; gap: 12px; }
+.task-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.task-head .push { margin-inline-start: auto; }
+.task-head button.badge { cursor: pointer; }
+.task-head button.badge .icon { width: 12px; height: 12px; }
+.task-facts { display: grid; gap: 10px; }
+@media (min-width: 760px) { .task-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.task-facts > div { display: grid; gap: 2px; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); font-size: 14px; }
+.chart .bar { fill: var(--blue); }
+.chart .bar-g:hover .bar { fill: var(--navy); }
+.chart svg { max-width: 100%; height: auto; }
+.backup-list .list-item { padding-inline: 0; }

@@ -29,7 +29,7 @@ function createLimiter({ factor = 1 } = {}) {
 }
 
 function createAuth({ db, config }) {
-  const cookieOptions = () => ({ path: '/', httpOnly: true, sameSite: 'strict', secure: config.production, maxAge: SESSION_HOURS * 3600 });
+  const cookieOptions = () => ({ path: '/', httpOnly: true, sameSite: 'strict', secure: config.cookieSecure, maxAge: SESSION_HOURS * 3600 });
 
   function start(reply, req, userId) {
     const t = token();

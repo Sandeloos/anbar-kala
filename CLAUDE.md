@@ -51,3 +51,6 @@ decision taken with them: `docs/decisions.md` (Persian) — read it before chang
 - Phase 3: `lib/returns.js`, `lib/statements.js` (statement math and Excel), views `returns.js`,
   `statements.js`, `count.js` (stocktake). Issued statements are never edited: change data and let the
   difference appear as an adjustment on the next statement. Download file names stay ASCII.
+- Phase 4: `lib/tasks.js` (inbox, fed by `sync.onChanges`), `lib/backup.js`, routes `tasks.js`, `system.js`,
+  views `inbox.js`, `settings.js` (system and backups), dashboard chart. Deployment: `docker-compose.yml`,
+  `Caddyfile`, `.env.example`, `docs/deploy.md`; the user guide is `docs/guide.md`.

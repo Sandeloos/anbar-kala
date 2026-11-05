@@ -25,12 +25,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t anbar .
+      - run: docker build -t anbar:latest .
       - name: Smoke test
         run: |
           docker run -d --name anbar -p 8080:8080 -e APP_SECRET=ci-secret -e PUBLIC_URL=http://localhost:8080 \
-            -e MANAGER_USERNAME=ci -e MANAGER_PASSWORD=ci-password-1 anbar
+            -e MANAGER_USERNAME=ci -e MANAGER_PASSWORD=ci-password-1 anbar:latest
           for i in $(seq 1 30); do curl -fs localhost:8080/health && break; sleep 1; done
           curl -fs localhost:8080/health
           curl -fs localhost:8080/ | grep -q 'انبار'
           docker logs anbar
+      # A ready image to copy to a server that cannot reach Docker Hub or npm (docs/deploy.md)
+      - name: Save the image
+        run: docker save anbar:latest | gzip > anbar-image.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anbar-image
+          path: anbar-image.tar.gz
+          retention-days: 30

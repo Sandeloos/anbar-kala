@@ -48,6 +48,15 @@
   freezes the items; voiding (manager, latest unpaid only) un-bills them. Excel via exceljs (RTL sheet).
 - Stocktake: `POST /stock/count` turns counted numbers into `count` moves.
 
+## Inbox, backups, deployment (phase 4)
+- `tasks` (`lib/tasks.js`): `sync.onChanges` reports every price/stock change; for active listings on
+  platforms other than the company site it opens or updates one task per (listing, kind) and closes it
+  when the value returns. Done records the price set on the platform into `listings.platform_price`.
+- Backups (`lib/backup.js`): `VACUUM INTO DATA_DIR/backups/anbar-<Tehran time>.db`, nightly from `jobs.js`
+  and on demand (`/api/system/backup`, manager), pruned to `backup_keep`.
+- Deployment: `docker-compose.yml` (app + Caddy for HTTPS, `Caddyfile`), `.env.example`, CI saves the
+  image as an artifact for servers without registry access. Guide: `docs/deploy.md` (Persian).
+
 ## Sync
 - **full**: every product page (100 per request, `_fields` trimmed) + variations of variable products
   (4 parents in parallel); items the site no longer lists get `removed_at`.

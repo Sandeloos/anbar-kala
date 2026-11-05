@@ -139,8 +139,10 @@ function createSync({ db, config, secrets, events, log, fetchImpl }) {
    * Writes normalised items: new products, changed prices/stock (with history)
    * and refreshed names/links. Returns counts and the ids that changed.
    */
+  const changeListeners = [];
   function apply(comp, items, { source, now = nowIso(), userId = null } = {}) {
     const stats = { seen: 0, created: 0, priceChanges: 0, stockChanges: 0, ids: [] };
+    const changes = [];
     if (!items.length) return stats;
     db.tx(() => {
       for (const it of items) {
@@ -175,6 +177,11 @@ function createSync({ db, config, secrets, events, log, fetchImpl }) {
           if (priceChanged) stats.priceChanges++;
           if (stockChanged) stats.stockChanges++;
           stats.ids.push(existing.id);
+          changes.push({
+            productId: existing.id, companyId: comp.id, priceChanged, stockChanged,
+            before: { regular_price: existing.regular_price, stock_status: existing.stock_status, stock_quantity: existing.stock_quantity },
+            after: { regular_price: it.regular_price, stock_status: it.stock_status, stock_quantity: it.stock_quantity }
+          });
         }
         db.run(`UPDATE products SET parent_woo_id = ?, type = ?, name = ?, parent_name = ?, attributes = ?, sku = ?, permalink = ?, slug = ?,
                   site_status = ?, regular_price = ?, sale_price = ?, stock_status = ?, stock_quantity = ?, manage_stock = ?,
@@ -194,6 +201,9 @@ function createSync({ db, config, secrets, events, log, fetchImpl }) {
     });
     if (stats.ids.length) {
       events.emit('products', { companyId: comp.id, ids: stats.ids, created: stats.created, priceChanges: stats.priceChanges, stockChanges: stats.stockChanges, source });
+    }
+    for (const fn of changeListeners) {
+      try { fn(changes); } catch (err) { log.error({ err }, 'change listener failed'); }
     }
     return stats;
   }
@@ -474,6 +484,8 @@ function createSync({ db, config, secrets, events, log, fetchImpl }) {
 
   return {
     running, clientFor, apply, normalise, fullSync, incrementalSync, refreshProduct, lookupUrl, applyPush, priceAt, manualPrice,
+    /** fn([{ productId, companyId, priceChanged, stockChanged, before, after }]) after every write of site changes */
+    onChanges: (fn) => changeListeners.push(fn),
     /** Connection test for the "new company" form (nothing is saved). */
     detect: ({ siteUrl, key, secret }) => detect({ siteUrl, key, secret, timeoutMs: config.wooTimeoutMs, fetchImpl }),
     isRunning: (companyId) => running.has(companyId),

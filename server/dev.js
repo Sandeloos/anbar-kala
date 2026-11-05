@@ -48,6 +48,16 @@ async function demo(port) {
   await app.listen({ host: '127.0.0.1', port });
   for (const c of db.all('SELECT id FROM companies')) await app.ctx.sync.fullSync(c.id);
   seedOrders(app);
+  // Inbox: our Digikala/Basalam prices (30% over the site), then three site prices change
+  db.run(`UPDATE listings SET platform_price = (SELECT CAST(ROUND(p.regular_price * listings.units * 1.3 / p.units_per_pack / 1000) AS INTEGER) * 1000
+          FROM products p WHERE p.id = listings.product_id) WHERE platform_id IN (1, 2)`);
+  const companyIds = db.all('SELECT id FROM companies ORDER BY id').map((r) => r.id);
+  for (const l of db.all(`SELECT l.product_id, p.woo_id, p.company_id, p.regular_price, c.price_unit FROM listings l JOIN products p ON p.id = l.product_id
+                          JOIN companies c ON c.id = p.company_id WHERE l.platform_id = 1 LIMIT 3`)) {
+    const shop = shops[companyIds.indexOf(l.company_id)];
+    const sitePrice = l.price_unit === 'rial' ? l.regular_price : l.regular_price / 10; // the shop's own unit
+    await shop.setPrice(l.woo_id, Math.round((sitePrice * 1.08) / 100) * 100);
+  }
   // Prices keep moving so the live updates are visible
   setInterval(() => {
     const shop = shops[Math.floor(Math.random() * shops.length)];

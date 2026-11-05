@@ -39,6 +39,8 @@ function loadConfig(overrides = {}) {
     // Background price/stock sync (off in tests, which call the sync directly)
     jobs: env.JOBS !== '0',
     relaxLimits: env.RELAX_LIMITS === '1',
+    // HTTPS-only cookie; COOKIE_SECURE=0 only for a first test of a server without HTTPS
+    cookieSecure: env.COOKIE_SECURE ? env.COOKIE_SECURE !== '0' : env.NODE_ENV === 'production',
     // Network timeout for each request to a WooCommerce site
     wooTimeoutMs: Number(env.WOO_TIMEOUT_MS || 20000),
     ...overrides

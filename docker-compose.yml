@@ -1,18 +1,41 @@
-# docker compose up -d   (put the values in a .env file next to this one)
+# Anbar on one server: the app and Caddy in front (automatic HTTPS for DOMAIN).
+#   cp .env.example .env   # fill it in
+#   docker compose up -d
+# Guide (Persian): docs/deploy.md
 services:
   anbar:
+    image: ${ANBAR_IMAGE:-anbar:latest}
     build: .
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:8080:8080"   # put nginx/Caddy with HTTPS in front
     environment:
-      APP_SECRET: ${APP_SECRET:?set APP_SECRET (long random string; encrypts the WooCommerce keys)}
-      PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL, e.g. https://anbar.example.ir}
+      APP_SECRET: ${APP_SECRET:?set APP_SECRET in .env (a long random string; encrypts the WooCommerce keys)}
+      PUBLIC_URL: https://${DOMAIN:?set DOMAIN in .env, e.g. anbar.example.ir}
       TRUST_PROXY: "1"
+      COOKIE_SECURE: ${COOKIE_SECURE:-1}
       MANAGER_USERNAME: ${MANAGER_USERNAME:-}
       MANAGER_PASSWORD: ${MANAGER_PASSWORD:-}
       MANAGER_NAME: ${MANAGER_NAME:-مدیر}
     volumes:
       - anbar-data:/data
+    expose:
+      - "8080"
+
+  caddy:
+    image: ${CADDY_IMAGE:-caddy:2.8-alpine}
+    restart: unless-stopped
+    depends_on:
+      - anbar
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
 volumes:
   anbar-data:
+  caddy-data:
+  caddy-config:

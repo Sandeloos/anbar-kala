@@ -19,7 +19,7 @@ export function connect({ signedOut } = {}) {
   source = new EventSource('/api/events');
   source.onopen = () => setDot('on');
   source.onerror = () => setDot('off');
-  for (const type of ['products', 'sync', 'company', 'activity', 'orders', 'stock', 'listings', 'returns', 'statements']) {
+  for (const type of ['products', 'sync', 'company', 'activity', 'orders', 'stock', 'listings', 'returns', 'statements', 'tasks']) {
     source.addEventListener(type, (e) => {
       let data = {};
       try { data = JSON.parse(e.data); } catch { /* ignore */ }

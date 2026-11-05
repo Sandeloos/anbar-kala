@@ -10,6 +10,7 @@ import { connect, disconnect, subscribe } from './live.js';
 
 const SECTIONS = [
   { group: 'کار روزانه', path: 'dashboard', label: 'داشبورد', icon: 'grid', load: () => import('./views/dashboard.js') },
+  { group: 'کار روزانه', path: 'inbox', label: 'کارتابل', icon: 'inbox', count: 'tasks_open', countTitle: 'کار باز', load: () => import('./views/inbox.js') },
   { group: 'کار روزانه', path: 'orders', label: 'سفارش‌ها', icon: 'cart', load: () => import('./views/orders.js') },
   { group: 'کار روزانه', path: 'receiving', label: 'دریافت روزانه', icon: 'truck', count: 'receiving_due', countTitle: 'ردیف منتظر دریافت', load: () => import('./views/receiving.js') },
   { group: 'کار روزانه', path: 'returns', label: 'مرجوعی‌ها', icon: 'refresh', count: 'returns_waiting', countTitle: 'مرجوعی منتظر تصمیم', load: () => import('./views/returns.js') },
@@ -227,6 +228,7 @@ window.addEventListener('hashchange', route);
 subscribe('products', refreshCountsSoon);
 subscribe('orders', refreshCountsSoon);
 subscribe('returns', refreshCountsSoon);
+subscribe('tasks', refreshCountsSoon);
 subscribe('sync', (d) => { if (d.state !== 'progress') refreshCountsSoon(); });
 
 /* ------------------------------------------------------------ quick search (Ctrl+K) */
