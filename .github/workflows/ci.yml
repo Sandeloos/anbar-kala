@@ -22,7 +22,7 @@ jobs:
       - run: npx playwright install --with-deps chromium
       # lint + unit/API tests with coverage thresholds + end-to-end (phone and laptop)
       - run: npm run check
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: playwright-report
@@ -57,7 +57,7 @@ jobs:
       # A ready image to copy to a server that cannot reach Docker Hub or npm (docs/deploy.md)
       - name: Save the image
         run: docker save anbar:latest | gzip > anbar-image.tar.gz
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: anbar-image
           path: anbar-image.tar.gz
