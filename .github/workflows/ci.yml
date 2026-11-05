@@ -2,6 +2,11 @@ name: CI
 on:
   push:
   pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -15,12 +20,22 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
+      # lint + unit/API tests with coverage thresholds + end-to-end (phone and laptop)
       - run: npm run check
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: playwright-report
           path: playwright-report
+  audit:
+    # Known vulnerabilities in the packages the server runs with (dev tools are not shipped)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm audit --omit=dev --audit-level=high
   docker:
     runs-on: ubuntu-latest
     steps:
@@ -28,11 +43,16 @@ jobs:
       - run: docker build -t anbar:latest .
       - name: Smoke test
         run: |
-          docker run -d --name anbar -p 8080:8080 -e APP_SECRET=ci-secret -e PUBLIC_URL=http://localhost:8080 \
-            -e MANAGER_USERNAME=ci -e MANAGER_PASSWORD=ci-password-1 anbar:latest
-          for i in $(seq 1 30); do curl -fs localhost:8080/health && break; sleep 1; done
+          docker run -d --name anbar -p 8080:8080 -e APP_SECRET=ci-secret-0123456789abcdef0123456789 -e PUBLIC_URL=http://localhost:8080 \
+            -e MANAGER_USERNAME=ci -e MANAGER_PASSWORD=ci-password-1 -e METRICS_TOKEN=ci-metrics-token-0123 anbar:latest
+          for i in $(seq 1 30); do curl -fs localhost:8080/ready && break; sleep 1; done
           curl -fs localhost:8080/health
+          curl -fs localhost:8080/ready
           curl -fs localhost:8080/ | grep -q 'انبار'
+          curl -fs -H 'Authorization: Bearer ci-metrics-token-0123' localhost:8080/metrics | grep -q '^anbar_up 1'
+          # A stop is graceful: the process exits 0 well within the grace period
+          time docker stop -t 30 anbar
+          test "$(docker inspect -f '{{.State.ExitCode}}' anbar)" = 0
           docker logs anbar
       # A ready image to copy to a server that cannot reach Docker Hub or npm (docs/deploy.md)
       - name: Save the image

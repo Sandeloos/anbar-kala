@@ -7,6 +7,9 @@ services:
     image: ${ANBAR_IMAGE:-anbar:latest}
     build: .
     restart: unless-stopped
+    # tini as PID 1 forwards SIGTERM; the server then finishes running syncs and requests
+    init: true
+    stop_grace_period: 40s
     environment:
       APP_SECRET: ${APP_SECRET:?set APP_SECRET in .env (a long random string; encrypts the WooCommerce keys)}
       PUBLIC_URL: https://${DOMAIN:?set DOMAIN in .env, e.g. anbar.example.ir}
@@ -15,6 +18,16 @@ services:
       MANAGER_USERNAME: ${MANAGER_USERNAME:-}
       MANAGER_PASSWORD: ${MANAGER_PASSWORD:-}
       MANAGER_NAME: ${MANAGER_NAME:-مدیر}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
     volumes:
       - anbar-data:/data
     expose:
@@ -24,7 +37,8 @@ services:
     image: ${CADDY_IMAGE:-caddy:2.8-alpine}
     restart: unless-stopped
     depends_on:
-      - anbar
+      anbar:
+        condition: service_healthy
     environment:
       DOMAIN: ${DOMAIN}
     ports:

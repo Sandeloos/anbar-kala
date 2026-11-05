@@ -87,9 +87,14 @@ function wall(y, mo, d, h = 0, mi = 0, se = 0) {
   return new Date(`${y}-${pad(mo)}-${pad(d)}T${pad(h)}:${pad(mi)}:${pad(se)}${TEHRAN_OFFSET}`).toISOString();
 }
 
+// Building an Intl formatter costs ~60 µs; formatting with a ready one ~2 µs. Statements and
+// reports call these once per order line, so the formatters are made once.
+const DAY_FMT = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tehran', year: 'numeric', month: '2-digit', day: '2-digit' });
+const TIME_FMT = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Tehran', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+
 /** ISO → { date: 'YYYY-MM-DD' (Gregorian, Tehran), jalali: [y, m, d] } */
 function tehranDay(iso) {
-  const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tehran', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso));
+  const p = DAY_FMT.format(new Date(iso));
   const [y, m, d] = p.split('-').map(Number);
   return { date: p, jalali: toJalali(y, m, d) };
 }
@@ -133,7 +138,7 @@ function monthsBetween(from, to) {
 /** "1404/09/03 ۱۴:۲۰" style label for spreadsheets */
 function jalaliDateTime(iso) {
   const { jalali: [y, m, d] } = tehranDay(iso);
-  const t = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Tehran', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(iso));
+  const t = TIME_FMT.format(new Date(iso));
   return `${y}/${pad(m)}/${pad(d)} ${t}`;
 }
 

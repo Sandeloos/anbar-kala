@@ -76,7 +76,7 @@ async function demo(port) {
 function seedOrders(app) {
   const { db, orders } = app.ctx;
   const { nowIso, searchKey } = require('./lib/util');
-  db.run("UPDATE price_history SET effective_at = ? WHERE source = 'import'", new Date(Date.now() - 70 * 864e5).toISOString());
+  db.maintenance(() => db.run("UPDATE price_history SET effective_at = ? WHERE source = 'import'", new Date(Date.now() - 70 * 864e5).toISOString()));
   const manager = db.get("SELECT * FROM users WHERE username = 'demo'");
   const ali = db.get("SELECT * FROM users WHERE username = 'ali'");
   const as = (u) => ({ user: { id: u.id, name: u.name }, ip: '127.0.0.1' });

@@ -146,7 +146,7 @@ async function renderList(view, ctx) {
 
   /** Saves one product's settings (used by the inline pack field and the confirm button). */
   async function saveRow(p, units) {
-    const r = await put(`/products/${p.id}`, { units_per_pack: units, warehouse_id: p.warehouse_id ?? '', tracked: !!p.tracked, note: p.note || '' });
+    const r = await put(`/products/${p.id}`, { units_per_pack: units, warehouse_id: p.warehouse_id ?? '', tracked: !!p.tracked, note: p.note || '' }, { version: p.version });
     Object.assign(p, r.product);
     return p;
   }
@@ -478,7 +478,7 @@ async function renderOne(view, ctx, id) {
     const btn = $('button[type=submit]', f);
     busy(btn, true);
     try {
-      d = await put(`/products/${id}`, { ...v, units_per_pack: n });
+      d = await put(`/products/${id}`, { ...v, units_per_pack: n }, { version: d.product.version });
       paint();
       toast('تنظیمات کالا ذخیره شد.');
       ctx.refreshCounts();

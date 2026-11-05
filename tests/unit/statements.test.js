@@ -16,7 +16,7 @@ async function setup(t) {
   await api.login();
   const s = await shop(ctx, { count: 4, seed: 21, variableRatio: 1 });
   const company = await addCompany(ctx, api, s);
-  ctx.db.run("UPDATE price_history SET effective_at = ? WHERE source = 'import'", new Date(Date.now() - 70 * 864e5).toISOString());
+  ctx.db.maintenance(() => ctx.db.run("UPDATE price_history SET effective_at = ? WHERE source = 'import'", new Date(Date.now() - 70 * 864e5).toISOString()));
   const [w25, w100] = s.products[0]._variations;
   const p25 = ctx.db.get('SELECT * FROM products WHERE woo_id = ?', w25.id);
   const p100 = ctx.db.get('SELECT * FROM products WHERE woo_id = ?', w100.id);
@@ -143,7 +143,8 @@ test('returns: kept, back to the company (credited this month), damaged; limits 
   assert.match(refused.body.error, /کالای خودمان/);
 
   // Issue this month later? Not yet over; but once a credit is on an issued statement it cannot be undone
-  ctx.db.run(`INSERT INTO statements (company_id, month, status, currency, issued_at) VALUES (?, ?, 'issued', 'toman', ?)`, company.id, thisMonth, new Date().toISOString());
+  ctx.db.run(`INSERT INTO statements (company_id, month, status, currency, returns_total, total, items, issued_at) VALUES (?, ?, 'issued', 'toman', ?, ?, 1, ?)`,
+    company.id, thisMonth, -back.body.return.value, -back.body.return.value, new Date().toISOString());
   const sid = ctx.db.get('SELECT MAX(id) AS id FROM statements').id;
   ctx.db.run(`INSERT INTO statement_items (statement_id, key, section, kind, item_month, amount) VALUES (?, ?, 'returns', 'return', ?, ?)`, sid, `R${r1.id}`, thisMonth, -back.body.return.value);
   assert.equal((await api.post(`/api/returns/${r1.id}/undo`)).status, 409);

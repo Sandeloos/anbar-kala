@@ -8,17 +8,25 @@ const { buildApp } = require('../../server/app');
 const { hashPassword, nowIso } = require('../../server/lib/util');
 const { createMockWoo } = require('../../tools/mock-woo');
 
-async function makeApp() {
+async function makeApp(overrides = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'anbar-test-'));
-  const config = loadConfig({ dataDir, jobs: false, secret: 'test-secret', relaxLimits: false, wooTimeoutMs: 5000 });
+  const config = loadConfig({ dataDir, jobs: false, secret: 'test-secret', relaxLimits: false, wooTimeoutMs: 5000, ...overrides });
   const app = await buildApp(config, { logger: false });
   const shops = [];
-  const cleanup = async () => {
+  const ctx = { app, config, db: app.ctx.db, shops, checkIntegrity: true };
+  // Every test ends with the whole-database integrity check: whatever a scenario did
+  // (orders, receiving, returns, statements), the books must still agree.
+  ctx.cleanup = async () => {
+    let report = null;
+    if (ctx.checkIntegrity && !app.ctx.shuttingDown) report = app.ctx.integrity.run();
     await app.close();
     for (const s of shops) await s.close();
     fs.rmSync(dataDir, { recursive: true, force: true });
+    if (report && !report.ok) {
+      throw new Error('integrity check failed: ' + JSON.stringify(report.results.filter((r) => !r.ok).map((r) => ({ id: r.id, problems: r.problems.slice(0, 3) }))));
+    }
   };
-  return { app, config, db: app.ctx.db, shops, cleanup };
+  return ctx;
 }
 
 async function addUser(db, { username = 'boss', password = 'secret-pass-1', role = 'manager', name = 'مدیر', mustChange = 0 } = {}) {
@@ -31,10 +39,10 @@ async function addUser(db, { username = 'boss', password = 'secret-pass-1', role
 /** A tiny client that keeps the session cookie and sends the X-Anbar header. */
 function client(app) {
   let cookie = '';
-  async function call(method, url, body) {
+  async function call(method, url, body, extra = {}) {
     const res = await app.inject({
       method, url,
-      headers: Object.assign({ 'x-anbar': '1' }, cookie ? { cookie } : {}, body !== undefined ? { 'content-type': 'application/json' } : {}),
+      headers: Object.assign({ 'x-anbar': '1' }, cookie ? { cookie } : {}, body !== undefined ? { 'content-type': 'application/json' } : {}, extra),
       payload: body !== undefined ? JSON.stringify(body) : undefined
     });
     const set = res.headers['set-cookie'];
@@ -47,7 +55,7 @@ function client(app) {
     return { status: res.statusCode, body: json, headers: res.headers };
   }
   return {
-    get: (u) => call('GET', u), post: (u, b = {}) => call('POST', u, b), put: (u, b = {}) => call('PUT', u, b), del: (u) => call('DELETE', u),
+    get: (u) => call('GET', u), post: (u, b = {}, h) => call('POST', u, b, h), put: (u, b = {}, h) => call('PUT', u, b, h), del: (u) => call('DELETE', u),
     login: (username = 'boss', password = 'secret-pass-1') => call('POST', '/api/auth/login', { username, password }),
     get cookie() { return cookie; }
   };

@@ -15,12 +15,12 @@ function row(u) {
   return {
     id: u.id, username: u.username, name: u.name, role: u.role, phone: u.phone, email: u.email, active: !!u.active,
     must_change_password: !!u.must_change_password, created_at: u.created_at, last_login_at: u.last_login_at,
-    last_seen_at: u.last_seen_at || null
+    last_seen_at: u.last_seen_at || null, version: u.version
   };
 }
 
 module.exports = async function userRoutes(app) {
-  const { db, audit, auth } = app.ctx;
+  const { db, audit, auth, concurrency } = app.ctx;
   const manager = { config: { manager: true } };
 
   // Everyone may see the list of names (filters in the activity log); details are for the manager
@@ -47,6 +47,7 @@ module.exports = async function userRoutes(app) {
   app.put('/users/:id', manager, async (req) => {
     const before = db.get('SELECT * FROM users WHERE id = ?', Number(req.params.id));
     if (!before) throw notFound('کاربر پیدا نشد.');
+    concurrency.check(req, before, { entity: 'user', label: 'این کاربر' });
     const body = z.object({ name: text('نام', 80), username, role: ROLE, phone: phone.optional(), email: email.optional(), active: bool }).parse(req.body || {});
     if (before.id === req.user.id && (!body.active || body.role !== 'manager')) {
       throw badRequest('نمی‌توانید نقش یا وضعیت حساب خودتان را تغییر دهید.');
@@ -63,8 +64,9 @@ module.exports = async function userRoutes(app) {
     const changes = audit.diff({ ...before, role: ROLE_LABEL[before.role], active: before.active ? 'بله' : 'خیر' },
       { ...after, role: ROLE_LABEL[after.role], active: after.active ? 'بله' : 'خیر' }, FIELDS);
     if (changes.length) {
-      db.run('UPDATE users SET name = ?, username = ?, role = ?, phone = ?, email = ?, active = ?, updated_at = ? WHERE id = ?',
-        after.name, after.username, after.role, after.phone, after.email, after.active, nowIso(), before.id);
+      db.run('UPDATE users SET name = ?, username = ?, role = ?, phone = ?, email = ?, active = ?, updated_at = ?, version = version + 1 WHERE id = ? AND version = ?',
+        after.name, after.username, after.role, after.phone, after.email, after.active, nowIso(), before.id, before.version).changes ||
+        concurrency.stale(db.get('SELECT * FROM users WHERE id = ?', before.id), { entity: 'user', label: 'این کاربر' });
       if (!after.active) auth.endOthers(before.id, null);
       audit(req, { action: 'update', entity: 'user', id: before.id, summary: `ویرایش کاربر «${after.name}»`, changes });
     }

@@ -92,7 +92,7 @@ export async function render(view, ctx) {
       const btn = $('button[type=submit]', form);
       busy(btn, true);
       try {
-        if (l) await put(`/listings/${l.id}`, payload); else await post('/listings', payload);
+        if (l) await put(`/listings/${l.id}`, payload, { version: l.version }); else await post('/listings', payload);
         closeSheet(); toast('آگهی ذخیره شد.'); await load();
       } catch (err) { showError(form, err); busy(btn, false); }
     });

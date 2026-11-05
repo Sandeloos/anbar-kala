@@ -18,12 +18,12 @@ const SORTS = {
 const SETTING_FIELDS = { units_per_pack: 'تعداد در هر بسته', warehouse: 'انبار اضافه‌ها', tracked: 'پیگیری', note: 'یادداشت' };
 
 module.exports = async function productRoutes(app) {
-  const { db, audit, sync } = app.ctx;
+  const { db, audit, sync, concurrency } = app.ctx;
 
   const COLS = `p.id, p.company_id, p.woo_id, p.parent_woo_id, p.type, p.name, p.parent_name, p.attributes, p.sku, p.permalink,
     p.site_status, p.regular_price, p.sale_price, p.stock_status, p.stock_quantity, p.manage_stock, p.price_source,
     p.units_per_pack, p.units_guessed, p.warehouse_id, p.tracked, p.note, p.configured_at, p.last_checked_at, p.last_changed_at, p.removed_at,
-    p.site_modified_at, c.name AS company_name, c.currency, c.warehouse_id AS company_warehouse_id`;
+    p.site_modified_at, p.version, c.name AS company_name, c.currency, c.warehouse_id AS company_warehouse_id`;
 
   function filters(q) {
     const where = [];
@@ -108,8 +108,9 @@ module.exports = async function productRoutes(app) {
     const label = (r) => ({ ...r, warehouse: warehouseLabel(r.warehouse_id), tracked: r.tracked ? 'بله' : 'خیر' });
     const changes = audit.diff(label(before), label(after), SETTING_FIELDS);
     const now = nowIso();
-    db.run(`UPDATE products SET units_per_pack = ?, warehouse_id = ?, tracked = ?, note = ?, units_guessed = 0, configured_at = COALESCE(configured_at, ?), updated_at = ?
-            WHERE id = ?`, after.units_per_pack, after.warehouse_id, after.tracked ? 1 : 0, after.note, now, now, before.id);
+    db.run(`UPDATE products SET units_per_pack = ?, warehouse_id = ?, tracked = ?, note = ?, units_guessed = 0, configured_at = COALESCE(configured_at, ?), updated_at = ?,
+              version = version + 1 WHERE id = ? AND version = ?`, after.units_per_pack, after.warehouse_id, after.tracked ? 1 : 0, after.note, now, now, before.id, before.version).changes ||
+      concurrency.stale(db.get('SELECT * FROM products WHERE id = ?', before.id), { entity: 'product', label: 'این کالا' });
     if (changes.length || !before.configured_at) {
       audit(req, {
         action: 'update', entity: 'product', id: before.id,
@@ -125,6 +126,7 @@ module.exports = async function productRoutes(app) {
   app.put('/products/:id', async (req) => {
     const before = db.get('SELECT * FROM products WHERE id = ?', Number(req.params.id));
     if (!before) throw notFound('کالا پیدا نشد.');
+    concurrency.check(req, before, { entity: 'product', label: 'این کالا' });
     const body = z.object({
       units_per_pack: intIn('تعداد در هر بسته', 1, 100000),
       warehouse_id: warehouseId,

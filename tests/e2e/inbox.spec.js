@@ -1,4 +1,5 @@
-// Phase 4 in a real browser: the inbox fills live when a company site changes a price; backups.
+// Phase 4 in a real browser: the inbox fills live when a company site changes a price; backups;
+// a stale edit is refused.
 const { test, expect } = require('@playwright/test');
 
 async function signIn(page) {
@@ -44,6 +45,22 @@ test('settings: take a backup now and see it in the list', async ({ page }, test
   await page.getByRole('button', { name: 'پشتیبان‌گیری همین الان' }).click();
   await page.click('#confirm-yes');
   await expect(page.locator('#backups .list-item').first()).toContainText('anbar-');
+});
+
+test('two people edit the same record: the later save is refused and nothing is overwritten', async ({ page }, testInfo) => {
+  laptopOnly(testInfo);
+  await signIn(page);
+  await page.goto('/#/warehouses');
+  const w = (await (await page.request.get('/api/warehouses')).json()).items[0];
+  await page.locator(`[data-edit="${w.id}"]`).click();
+  await page.fill('#w-notes', 'یادداشت من');
+  // Meanwhile someone else saves the same warehouse
+  const other = await page.request.put(`/api/warehouses/${w.id}`, { headers: H, data: { name: w.name, notes: 'یادداشت همکار', active: true } });
+  expect(other.status()).toBe(200);
+  await page.click('#f-wh button[type=submit]');
+  await expect(page.locator('#f-wh')).toContainText('در این فاصله');
+  const now = (await (await page.request.get('/api/warehouses')).json()).items.find((x) => x.id === w.id);
+  expect(now.notes).toBe('یادداشت همکار');
 });
 
 test('phase 4 pages: no serious accessibility problems, no sideways scroll', async ({ page }) => {

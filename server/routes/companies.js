@@ -25,7 +25,7 @@ const FIELDS = {
 const CURRENCY_LABEL = { toman: 'تومان', rial: 'ریال' };
 
 module.exports = async function companyRoutes(app) {
-  const { db, audit, sync, secrets, events } = app.ctx;
+  const { db, audit, sync, secrets, events, concurrency } = app.ctx;
 
   function webhookUrl(req, id) {
     const base = app.ctx.config.publicUrl || `${req.protocol}://${req.headers.host}`;
@@ -47,7 +47,7 @@ module.exports = async function companyRoutes(app) {
       last_full_sync_at: c.last_full_sync_at, last_incremental_at: c.last_incremental_at, last_webhook_at: c.last_webhook_at,
       products: counts.products || 0, out_of_stock: counts.out_of_stock || 0, needs_setup: counts.needs_setup || 0, price_changes_24h: changes,
       webhook_url: req ? webhookUrl(req, c.id) : null, webhook_secret: c.webhook_secret,
-      created_at: c.created_at, updated_at: c.updated_at
+      created_at: c.created_at, updated_at: c.updated_at, version: c.version
     };
   }
   const one = (id) => {
@@ -115,6 +115,7 @@ module.exports = async function companyRoutes(app) {
 
   app.put('/companies/:id', async (req) => {
     const before = one(req.params.id);
+    concurrency.check(req, before, { entity: 'company', label: 'این شرکت' });
     const body = companyBody(true).parse(req.body || {});
     const dupe = db.get('SELECT id FROM companies WHERE site_url = ? AND id <> ?', body.site_url, before.id);
     if (dupe) throw conflict('این سایت برای شرکت دیگری ثبت شده است.', { site_url: 'تکراری است.' });
@@ -142,12 +143,13 @@ module.exports = async function companyRoutes(app) {
     if (keysChanged) changes.push({ field: 'key', label: 'کلید API', from: `…${before.key_hint || ''}`, to: `…${newKey.slice(-4)}` });
     db.run(`UPDATE companies SET name = ?, site_url = ?, currency = ?, price_unit = ?, warehouse_id = ?, contact_name = ?, contact_phone = ?,
               notes = ?, active = ?, api_style = ?, auth_mode = ?, site_currency = ?, updated_at = ?,
-              woo_key_enc = COALESCE(?, woo_key_enc), woo_secret_enc = COALESCE(?, woo_secret_enc), key_hint = COALESCE(?, key_hint)
-            WHERE id = ?`,
+              woo_key_enc = COALESCE(?, woo_key_enc), woo_secret_enc = COALESCE(?, woo_secret_enc), key_hint = COALESCE(?, key_hint),
+              version = version + 1
+            WHERE id = ? AND version = ?`,
     after.name, after.site_url, after.currency, after.price_unit, after.warehouse_id, after.contact_name, after.contact_phone,
     after.notes, after.active, conn.api_style, conn.auth_mode, conn.site_currency, nowIso(),
     keysChanged ? secrets.encrypt(newKey) : null, keysChanged ? secrets.encrypt(newSecret) : null, keysChanged ? newKey.slice(-4) : null,
-    before.id);
+    before.id, before.version).changes || concurrency.stale(one(before.id), { entity: 'company', label: 'این شرکت' });
     if (changes.length) audit(req, { action: 'update', entity: 'company', id: before.id, summary: `ویرایش شرکت «${after.name}»`, changes });
     // A different price unit changes every stored number: re-read everything with the new unit
     if (before.price_unit !== after.price_unit || keysChanged || body.site_url !== before.site_url) {

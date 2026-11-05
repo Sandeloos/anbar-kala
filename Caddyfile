@@ -10,6 +10,8 @@
 	# Live updates (server-sent events) must not be buffered
 	reverse_proxy anbar:8080 {
 		flush_interval -1
+		# One id per request, in Caddy's log and Anbar's log alike
+		header_up X-Request-Id {http.request.uuid}
 	}
 	header {
 		-Server

@@ -30,9 +30,15 @@ class WooError extends Error {
   }
 }
 
-function createWooClient({ siteUrl, key, secret, apiStyle = 'wp-json', authMode = 'header', timeoutMs = 20000, fetchImpl }) {
+/** Failures worth another try: the site was slow or overloaded, or the network dropped. */
+const RETRYABLE = new Set(['timeout', 'network', 'dns']);
+const RETRY_STATUS = new Set([429, 500, 502, 503, 504]);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function createWooClient({ siteUrl, key, secret, apiStyle = 'wp-json', authMode = 'header', timeoutMs = 20000, fetchImpl, retries = 2, metrics, retryBaseMs = 500 }) {
   const doFetch = fetchImpl || globalThis.fetch;
   let requests = 0;
+  let retried = 0;
 
   function buildUrl(route, params = {}) {
     const q = new URLSearchParams();
@@ -48,7 +54,29 @@ function createWooClient({ siteUrl, key, secret, apiStyle = 'wp-json', authMode 
     return `${url}?${q.toString()}`;
   }
 
+  /**
+   * One API call, retried with exponential back-off and jitter on time-outs, dropped
+   * connections and 429/5xx answers (honouring Retry-After, at most 30 s). Wrong keys,
+   * missing products and HTML pages are not retried: another try would not help.
+   */
   async function request(route, params) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const res = await once(route, params);
+        if (metrics) metrics.inc('anbar_woo_requests_total', { outcome: 'ok' });
+        return res;
+      } catch (err) {
+        const retryable = err instanceof WooError && (RETRYABLE.has(err.code) || (err.status && RETRY_STATUS.has(err.status)));
+        if (metrics) metrics.inc('anbar_woo_requests_total', { outcome: retryable && attempt < retries ? 'retry' : err.code || 'error' });
+        if (!retryable || attempt >= retries) throw err;
+        retried++;
+        const wait = err.retryAfter ? Math.min(30000, err.retryAfter * 1000) : retryBaseMs * 2 ** attempt + Math.floor(Math.random() * retryBaseMs);
+        await sleep(wait);
+      }
+    }
+  }
+
+  async function once(route, params) {
     const url = buildUrl(route, params);
     const headers = { Accept: 'application/json', 'User-Agent': 'Anbar/1.0 (+warehouse sync)' };
     if (authMode === 'header') headers.Authorization = 'Basic ' + Buffer.from(`${key}:${secret}`).toString('base64');
@@ -89,13 +117,15 @@ function createWooClient({ siteUrl, key, secret, apiStyle = 'wp-json', authMode 
           wcCode === 'rest_no_route' ? 'ووکامرس روی این سایت فعال نیست یا API آن در دسترس نیست.' : 'این مورد در سایت پیدا نشد.',
           { status: 404, wcCode });
       }
-      throw new WooError('http', `سایت خطای ${res.status} برگرداند${data && data.message ? `: ${data.message}` : ''}.`, { status: res.status, wcCode });
+      const retryAfter = Number(res.headers.get('retry-after')) || undefined;
+      throw new WooError('http', `سایت خطای ${res.status} برگرداند${data && data.message ? `: ${data.message}` : ''}.`, { status: res.status, wcCode, retryAfter });
     }
     return { data, totalPages: Number(res.headers.get('x-wp-totalpages') || 1), total: Number(res.headers.get('x-wp-total') || 0) };
   }
 
   return {
     get requests() { return requests; },
+    get retried() { return retried; },
     request,
     /** Store currency as WooCommerce reports it (IRT = toman, IRR = rial, …). */
     async storeCurrency() {
@@ -136,7 +166,7 @@ async function detect({ siteUrl, key, secret, timeoutMs, fetchImpl }) {
   ];
   let firstError = null;
   for (const a of attempts) {
-    const client = createWooClient({ siteUrl, key, secret, timeoutMs, fetchImpl, ...a });
+    const client = createWooClient({ siteUrl, key, secret, timeoutMs, fetchImpl, retries: 0, ...a });
     try {
       const page = await client.products({ perPage: 1 });
       const siteCurrency = await client.storeCurrency();

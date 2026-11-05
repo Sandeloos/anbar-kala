@@ -10,9 +10,10 @@ decision taken with them: `docs/decisions.md` (Persian) — read it before chang
 - `npm install`, then `npm run demo` → http://127.0.0.1:8080 with three fake WooCommerce shops whose
   prices move every few seconds (demo / demo-1234 manager, ali / demo-1234 admin).
 - Real use: `MANAGER_USERNAME=… MANAGER_PASSWORD=… npm run db:seed`, then `npm run dev`.
-- `npm run check` = eslint + `php -l` on the plugin + unit/API tests (node:test, `tests/unit`) +
-  Playwright (`tests/e2e`, laptop and phone, axe, font and horizontal-scroll checks) against
-  `tests/e2e-server.js`. Run it before every push. Tests run in `Asia/Tehran`.
+- `npm run check` = eslint + `php -l` on the plugin + unit/API tests with coverage thresholds
+  (node:test, `tests/unit`; every test ends with the integrity check) + Playwright (`tests/e2e`, laptop
+  and phone, axe, font and horizontal-scroll checks) against `tests/e2e-server.js`. Run it before every
+  push. Tests run in `Asia/Tehran`. `npm run bench` = load benchmark (`docs/performance.md`).
 
 ## Rules
 - This project lives only in the Sandeloos/anbar-kala repo. Local scratch (screenshots) goes in `.local/`.
@@ -32,12 +33,23 @@ decision taken with them: `docs/decisions.md` (Persian) — read it before chang
   container, so a late reload of a page you left cannot draw over the current one.
 - Stock is a ledger (`stock_moves`); never update or delete rows, write an opposite row.
 - Order lines freeze the site price at the order time; change it only through `setLinePrice` (reason required).
+- The database enforces the money rules with triggers (`005_integrity.sql`): append-only history and
+  ledger, frozen issued statements, no deletes, stock never below zero. Never weaken a guard; a deliberate
+  data repair goes through `db.maintenance(fn)`. Never edit a migration that has shipped (checksums) — add one.
+- Edits of companies/products/listings/users/warehouses: `concurrency.check(req, before, …)` early, then
+  `UPDATE … SET version = version + 1 WHERE id = ? AND version = ?` and `concurrency.stale()` on 0 changes;
+  the browser passes `put(path, body, { version })`. Writes are idempotent (`Idempotency-Key`, `api.js`).
+- Create `Intl.DateTimeFormat` once at module level, never per call (it costs ~60 µs).
+- Technical decisions: `docs/adr/`. Operations: `/health`, `/ready`, `/metrics` (METRICS_TOKEN), request ids,
+  graceful `app.shutdown()`; config is validated in `config.js` (add new variables to its zod schema).
 
 ## Structure
 - `server/app.js` builds the app; `routes/*` (one file per area, `validate.js` = zod pieces with
   Persian messages); `lib/sync.js` (WooCommerce sync, price history, price-at), `lib/woo.js` (REST client
   and connection detection), `lib/auth.js`, `lib/audit.js`, `lib/secrets.js` (AES-GCM for API keys),
-  `jobs.js` (scheduler), `migrations/*.sql`.
+  `jobs.js` (scheduler: sync with back-off, nightly backup + integrity, key pruning), `migrations/*.sql`.
+  Engineering: `lib/integrity.js`, `lib/idempotency.js`, `lib/concurrency.js`, `lib/metrics.js`,
+  `tools/bench.js`; tests in `tests/unit/engineering.test.js`.
 - `public/index.html` (shell, icon sprite, dialogs) + `assets/css/app.css` + `assets/js/`
   (`app.js` router/shell/palette, `api.js`, `ui.js`, `live.js`, `views/<section>.js` each exporting
   `render(view, ctx, params)`; handlers are assigned as `view.onclick = …` so the next view replaces them).

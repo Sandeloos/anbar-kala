@@ -6,7 +6,7 @@
  */
 const { z, optText, intIn } = require('./validate');
 const { badRequest, nowIso } = require('../lib/util');
-const { dayStart } = require('../lib/jalali');
+const { dayStart, tehranDay } = require('../lib/jalali');
 
 const pick = z.object({
   product_id: z.number().int(), warehouse_id: z.number().int(),
@@ -20,18 +20,22 @@ module.exports = async function receivingRoutes(app) {
   app.get('/receiving', async (req) => {
     const q = req.query || {};
     const until = /^\d{4}-\d{2}-\d{2}$/.test(q.until || '') ? dayStart(q.until) : null;
+    const today = dayStart(tehranDay(nowIso()).date);
+    // Only pending lines and today's receipts are read (indexes order_lines_pending / order_lines_received),
+    // not every line the company ever had
     const companies = db.all(`SELECT c.id, c.name,
-        SUM(CASE WHEN l.status = 'pending' THEN 1 ELSE 0 END) AS pending,
-        SUM(CASE WHEN l.status = 'pending' AND o.ordered_at < ? THEN 1 ELSE 0 END) AS due,
-        SUM(CASE WHEN l.status <> 'pending' AND l.received_at >= ? THEN 1 ELSE 0 END) AS done_today
-      FROM companies c LEFT JOIN order_lines l ON l.company_id = c.id LEFT JOIN orders o ON o.id = l.order_id AND o.cancelled_at IS NULL
-      WHERE c.active = 1 GROUP BY c.id ORDER BY pending DESC, c.name`, until || nowIso(), dayStart(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Tehran' })));
+        (SELECT COUNT(*) FROM order_lines l JOIN orders o ON o.id = l.order_id
+           WHERE l.company_id = c.id AND l.status = 'pending' AND o.cancelled_at IS NULL) AS pending,
+        (SELECT COUNT(*) FROM order_lines l JOIN orders o ON o.id = l.order_id
+           WHERE l.company_id = c.id AND l.status = 'pending' AND o.cancelled_at IS NULL AND o.ordered_at < ?) AS due,
+        (SELECT COUNT(*) FROM order_lines l WHERE l.company_id = c.id AND l.received_at >= ? AND l.status <> 'pending') AS done_today
+      FROM companies c WHERE c.active = 1 ORDER BY pending DESC, c.name`, until || nowIso(), today);
     const companyId = Number(q.company) || null;
     let lines = [];
     if (companyId) {
       const pending = orders.receivingList({ companyId, until, status: 'pending' });
       // Lines received today stay visible (with undo) so the day's work can be checked
-      const done = orders.receivingList({ companyId, status: 'done' }).filter((l) => l.received_at && l.received_at >= dayStart(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Tehran' })));
+      const done = orders.receivingList({ companyId, status: 'done', receivedSince: today });
       lines = [...pending, ...done];
     }
     return { companies, lines };

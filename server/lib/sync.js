@@ -111,8 +111,14 @@ function effectiveTime(siteModified, lastChecked, now) {
 }
 
 /* ------------------------------------------------------------ the engine */
-function createSync({ db, config, secrets, events, log, fetchImpl }) {
+/** Wait after the n-th failed run in a row: 2, 4, 8 … minutes, at most an hour. */
+function backoffMinutes(failures) {
+  return Math.min(60, 2 ** Math.max(1, failures));
+}
+
+function createSync({ db, config, secrets, events, log, fetchImpl, metrics }) {
   const running = new Map(); // companyId → run kind
+  const runPromises = new Set();
 
   function clientFor(company) {
     if (!company.woo_key_enc || !company.woo_secret_enc) {
@@ -125,7 +131,8 @@ function createSync({ db, config, secrets, events, log, fetchImpl }) {
       apiStyle: company.api_style,
       authMode: company.auth_mode,
       timeoutMs: config.wooTimeoutMs,
-      fetchImpl
+      fetchImpl,
+      metrics
     });
   }
 
@@ -246,12 +253,19 @@ function createSync({ db, config, secrets, events, log, fetchImpl }) {
     err ? 'error' : 'ok', now, run.requests, run.seen, run.created, run.priceChanges, run.stockChanges, run.removed,
     err ? err.message : null, run.id);
     if (err) {
-      db.run("UPDATE companies SET sync_state = 'error', sync_error = ? WHERE id = ?", err.message, comp.id);
+      // Back off from a site that keeps failing so the scheduler does not hammer it every minute
+      const failures = (db.get('SELECT sync_failures FROM companies WHERE id = ?', comp.id).sync_failures || 0) + 1;
+      const next = new Date(Date.now() + backoffMinutes(failures) * 60e3).toISOString();
+      db.run("UPDATE companies SET sync_state = 'error', sync_error = ?, sync_failures = ?, next_sync_at = ? WHERE id = ?", err.message, failures, next, comp.id);
     } else {
       const cols = run.kind === 'full'
         ? 'last_full_sync_at = ?, last_incremental_at = ?'
         : 'last_incremental_at = ?, last_full_sync_at = COALESCE(last_full_sync_at, ?)';
-      db.run(`UPDATE companies SET sync_state = 'ok', sync_error = NULL, ${cols} WHERE id = ?`, run.startedAt, run.startedAt, comp.id);
+      db.run(`UPDATE companies SET sync_state = 'ok', sync_error = NULL, sync_failures = 0, next_sync_at = NULL, ${cols} WHERE id = ?`, run.startedAt, run.startedAt, comp.id);
+    }
+    if (metrics) {
+      metrics.inc('anbar_sync_runs_total', { kind: run.kind, result: err ? 'error' : 'ok' });
+      metrics.observe('anbar_sync_duration_seconds', { kind: run.kind }, (Date.now() - new Date(run.startedAt).getTime()) / 1000, [1, 5, 15, 30, 60, 120, 300, 600]);
     }
     running.delete(comp.id);
     events.emit('sync', {
@@ -280,7 +294,7 @@ function createSync({ db, config, secrets, events, log, fetchImpl }) {
   }
 
   /** Reads every product and variation of the site. */
-  async function fullSync(companyId, { userId } = {}) {
+  async function fullSyncRun(companyId, { userId } = {}) {
     const comp = company(companyId);
     const run = startRun(comp, 'full', userId);
     let client = null;
@@ -316,10 +330,10 @@ function createSync({ db, config, secrets, events, log, fetchImpl }) {
   }
 
   /** Only what changed since the last run (with two minutes of overlap). */
-  async function incrementalSync(companyId, { userId } = {}) {
+  async function incrementalSyncRun(companyId, { userId } = {}) {
     const comp = company(companyId);
     const since = comp.last_incremental_at || comp.last_full_sync_at;
-    if (!since) return fullSync(companyId, { userId });
+    if (!since) return fullSyncRun(companyId, { userId });
     const run = startRun(comp, 'incremental', userId);
     let client = null;
     try {
@@ -482,8 +496,32 @@ function createSync({ db, config, secrets, events, log, fetchImpl }) {
     return null;
   }
 
+  /** Runs are tracked so a shutdown can wait for them instead of cutting a sync in half. */
+  function tracked(fn) {
+    return (...args) => {
+      const p = fn(...args);
+      runPromises.add(p);
+      const done = () => runPromises.delete(p);
+      p.then(done, done);
+      return p;
+    };
+  }
+  const fullSync = tracked(fullSyncRun);
+  const incrementalSync = tracked(incrementalSyncRun);
+
+  /** Resolves when no sync is running, or after timeoutMs (true = all finished). */
+  async function whenIdle(timeoutMs = 25000) {
+    if (!runPromises.size) return true;
+    let timer;
+    const timeout = new Promise((r) => { timer = setTimeout(() => r(false), timeoutMs); });
+    const all = Promise.allSettled([...runPromises]).then(() => true);
+    const result = await Promise.race([all, timeout]);
+    clearTimeout(timer);
+    return result;
+  }
+
   return {
-    running, clientFor, apply, normalise, fullSync, incrementalSync, refreshProduct, lookupUrl, applyPush, priceAt, manualPrice,
+    running, clientFor, whenIdle, apply, normalise, fullSync, incrementalSync, refreshProduct, lookupUrl, applyPush, priceAt, manualPrice,
     /** fn([{ productId, companyId, priceChanged, stockChanged, before, after }]) after every write of site changes */
     onChanges: (fn) => changeListeners.push(fn),
     /** Connection test for the "new company" form (nothing is saved). */
@@ -493,4 +531,4 @@ function createSync({ db, config, secrets, events, log, fetchImpl }) {
   };
 }
 
-module.exports = { createSync, normalise, effectiveTime, decodeEntities, guessUnits };
+module.exports = { createSync, backoffMinutes, normalise, effectiveTime, decodeEntities, guessUnits };

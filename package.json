@@ -11,9 +11,11 @@
     "mock:woo": "node tools/mock-woo.js",
     "lint": "eslint . && php -l wordpress-plugin/anbar-connector/anbar-connector.php",
     "test:unit": "TZ=Asia/Tehran node --test \"tests/unit/*.test.js\"",
+    "test:coverage": "TZ=Asia/Tehran node --test --experimental-test-coverage --test-coverage-exclude='tests/**' --test-coverage-exclude='tools/**' --test-coverage-lines=88 --test-coverage-branches=65 --test-coverage-functions=82 \"tests/unit/*.test.js\"",
     "test:e2e": "playwright test",
     "test": "npm run test:unit && npm run test:e2e",
-    "check": "npm run lint && npm test"
+    "check": "npm run lint && npm run test:coverage && npm run test:e2e",
+    "bench": "node tools/bench.js"
   },
   "engines": {
     "node": ">=22.13"

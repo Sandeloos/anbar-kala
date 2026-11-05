@@ -1,4 +1,4 @@
-/** Software settings (manager only): sync timing, inbox limit, backups and system health. */
+/** Software settings (manager only): sync timing, inbox limit, backups, system health and the integrity check. */
 import { get, put, post } from '../api.js';
 import { $, esc, icon, fa, when, toast, showError, formValues, busy, latin, confirm } from '../ui.js';
 
@@ -35,7 +35,22 @@ export async function render(view) {
         <div class="list backup-list" id="backups"></div>
         <p class="small muted">نسخه‌ی پشتیبان همه‌ی داده‌هاست؛ کلیدهای API شرکت‌ها در آن رمزشده می‌ماند و فقط با همین APP_SECRET باز می‌شود. برای بازگرداندن، راهنمای docs/deploy.md را ببینید.</p>
       </section>
-    </div>`;
+    </div>
+    <section class="card" aria-labelledby="h-int" style="margin-top:16px">
+      <div class="card-head"><h2 id="h-int">سلامت داده‌ها</h2><button class="btn btn-sm" type="button" data-integrity>${icon('check')}بررسی همین الان</button></div>
+      <p class="small muted">هر شب بعد از پشتیبان‌گیری بررسی می‌شود که موجودی منفی نشده باشد، هر ردیف سفارش جمعش درست باشد، هیچ فروشی دو بار در صورت‌حساب نیامده باشد و جمع صورت‌حساب‌ها با ردیف‌هایشان یکی باشد.</p>
+      <div id="integrity"></div>
+    </section>`;
+  const paintIntegrity = (r) => {
+    const box = $('#integrity', view);
+    if (!r) { box.innerHTML = '<p class="small muted">هنوز بررسی نشده.</p>'; return; }
+    const bad = r.results.filter((c) => !c.ok);
+    box.innerHTML = `<p>${bad.length ? `<span class="badge badge-red">${fa(bad.length)} مورد نیاز به بررسی</span>` : '<span class="badge badge-green">همه‌چیز درست است</span>'}
+      <span class="small muted">${when(r.at, 'full')} · ${fa(r.results.length)} بررسی</span></p>
+      ${bad.length ? `<div class="list">${bad.map((c) => `<div class="list-item"><span class="grow"><span class="title">${esc(c.label)} (${fa(c.count)})</span>
+        <span class="sub">${c.problems.slice(0, 5).map((p) => `<span>${esc(p.detail)}</span>`).join('')}</span></span></div>`).join('')}</div>` : ''}`;
+  };
+  paintIntegrity(sys.integrity);
   const paintBackups = (list) => {
     $('#backups', view).innerHTML = list.length ? list.map((b) => `<div class="list-item"><span class="grow"><span class="title ltr">${esc(b.name)}</span><span class="sub"><span>${when(b.at, 'full')}</span><span>${size(b.size)}</span></span></span>
       <a class="btn btn-sm btn-ghost" href="/api/system/backups/${encodeURIComponent(b.name)}">${icon('download')}دانلود</a></div>`).join('')
@@ -52,6 +67,12 @@ export async function render(view) {
     try { await put('/settings', v); toast('تنظیمات ذخیره شد.'); } catch (err) { showError(f, err); } finally { busy(btn, false); }
   });
   view.onclick = async (e) => {
+    const ib = e.target.closest('[data-integrity]');
+    if (ib) {
+      busy(ib, true, 'در حال بررسی…');
+      try { const r = await post('/system/integrity'); paintIntegrity(r.report); toast(r.report.ok ? 'داده‌ها سالم است.' : 'مشکلی پیدا شد؛ فهرست را ببینید.', { error: !r.report.ok }); } catch (err) { toast(err.message, { error: true }); } finally { busy(ib, false); }
+      return;
+    }
     const b = e.target.closest('[data-backup]');
     if (!b) return;
     if (!(await confirm({ title: 'همین الان نسخه‌ی پشتیبان گرفته شود؟', yes: 'پشتیبان‌گیری' }))) return;

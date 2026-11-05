@@ -460,13 +460,14 @@ function createOrders({ db, sync, events, audit }) {
   }
 
   /** Lines waiting for (or received on) a day for one company. */
-  function receivingList({ companyId, until, status }) {
+  function receivingList({ companyId, until, status, receivedSince }) {
     const where = ['o.cancelled_at IS NULL'];
     const params = [];
     if (companyId) { where.push('l.company_id = ?'); params.push(companyId); }
     if (status === 'pending') where.push("l.status = 'pending'");
     else if (status === 'done') where.push("l.status <> 'pending'");
     if (until) { where.push('o.ordered_at < ?'); params.push(until); }
+    if (receivedSince) { where.push('l.received_at >= ?'); params.push(receivedSince); }
     return db.all(`SELECT l.*, o.ordered_at, o.order_number, pl.name AS platform_name, p.name AS product_name, p.attributes, p.permalink, p.units_per_pack AS product_units,
                      p.parent_woo_id, c.name AS company_name, c.currency, li.title AS listing_title, ru.name AS received_by_name,
                      (SELECT COALESCE(SUM(m.units), 0) FROM stock_moves m JOIN products pp ON pp.id = m.product_id

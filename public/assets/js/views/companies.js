@@ -299,7 +299,7 @@ async function renderOne(view, ctx, id) {
       const btn = $('button[type=submit]', f);
       busy(btn, true, v.key ? 'در حال بررسی کلید…' : 'در حال ذخیره…');
       try {
-        data.company = (await put(`/companies/${id}`, { ...v, contact_phone: latin(v.contact_phone) })).company;
+        data.company = (await put(`/companies/${id}`, { ...v, contact_phone: latin(v.contact_phone) }, { version: data.company.version })).company;
         closeSheet();
         paint();
         toast('تغییرات ذخیره شد.');

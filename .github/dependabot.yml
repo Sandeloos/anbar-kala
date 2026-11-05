@@ -1,0 +1,18 @@
+# Weekly update PRs for npm packages, GitHub Actions and the Docker base image.
+# Each PR runs the full check (lint, coverage, end-to-end) before anyone merges it.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly, day: saturday, time: "06:00", timezone: Asia/Tehran }
+    open-pull-requests-limit: 5
+    groups:
+      dev-tools:
+        dependency-type: development
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: monthly }
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: monthly }

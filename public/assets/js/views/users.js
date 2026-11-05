@@ -64,7 +64,7 @@ export async function render(view, ctx) {
       busy(btn, true);
       try {
         if (u) {
-          await put(`/users/${u.id}`, v);
+          await put(`/users/${u.id}`, v, { version: u.version });
           closeSheet();
           toast('تغییرات کاربر ذخیره شد.');
         } else {

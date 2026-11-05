@@ -9,7 +9,7 @@ const { nowIso, notFound, conflict, badRequest, searchKey, clampInt, toRial } = 
 const FIELDS = { platform: 'پلتفرم', product: 'کالای سایت', code: 'کد در پلتفرم', title: 'عنوان در پلتفرم', units: 'تعداد عدد در هر فروش', platform_price: 'قیمت در پلتفرم (ریال)', active: 'فعال', note: 'یادداشت' };
 
 module.exports = async function listingRoutes(app) {
-  const { db, audit, events } = app.ctx;
+  const { db, audit, events, concurrency } = app.ctx;
 
   /* ------------------------------------------------------------ platforms */
   app.get('/platforms', async () => ({ items: db.all('SELECT * FROM platforms ORDER BY active DESC, sort, id').map((p) => ({ ...p, active: !!p.active })) }));
@@ -89,6 +89,7 @@ module.exports = async function listingRoutes(app) {
 
   app.put('/listings/:id', async (req) => {
     const before = one(req.params.id);
+    concurrency.check(req, before, { entity: 'listing', label: 'این آگهی' });
     const b = listingBody.parse(req.body || {});
     const p = db.get('SELECT * FROM products WHERE id = ?', b.product_id);
     if (!p) throw badRequest('کالا پیدا نشد.', { product_id: 'پیدا نشد.' });
@@ -100,9 +101,9 @@ module.exports = async function listingRoutes(app) {
     const label = (r) => ({ ...r, platform: pname(r.platform_id), product: prname(r.product_id), active: r.active ? 'بله' : 'خیر' });
     const changes = audit.diff(label(before), label(after), FIELDS);
     if (changes.length) {
-      db.run(`UPDATE listings SET platform_id = ?, product_id = ?, code = ?, title = ?, units = ?, platform_price = ?, note = ?, active = ?, search_text = ?, updated_at = ?
-              WHERE id = ?`, after.platform_id, after.product_id, after.code, after.title, after.units, after.platform_price, after.note, after.active,
-      search(after, p), nowIso(), before.id);
+      db.run(`UPDATE listings SET platform_id = ?, product_id = ?, code = ?, title = ?, units = ?, platform_price = ?, note = ?, active = ?, search_text = ?, updated_at = ?,
+              version = version + 1 WHERE id = ? AND version = ?`, after.platform_id, after.product_id, after.code, after.title, after.units, after.platform_price, after.note, after.active,
+      search(after, p), nowIso(), before.id, before.version).changes || concurrency.stale(one(before.id), { entity: 'listing', label: 'این آگهی' });
       audit(req, { action: 'update', entity: 'listing', id: before.id, summary: `ویرایش آگهی ${after.code || ''} «${p.name}»`, changes });
       events.emit('listings', { ids: [before.id] });
     }

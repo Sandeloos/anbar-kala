@@ -68,6 +68,42 @@
 - **refresh** / **lookup**: one product on demand; "add by link" resolves a product URL (slug or
   `?p=`) and picks the variation from `attribute_*` query parameters.
 
+## Reliability (engineering pass)
+- **The database enforces the rules** (`migrations/005_integrity.sql`): `audit_log` and `price_history`
+  are append-only; `stock_moves` rows are frozen except `reversed_by` (set once) and `value`, and stock of
+  a (product, warehouse, owner) can never go below zero; issued `statements`/`statement_items` are
+  frozen and status only moves issued → paid | void; orders, lines, products, companies, users and
+  returns cannot be deleted; `units_total = qty × units_per_sale` and received units add up. A bug or a
+  manual SQL edit gets an error instead of corrupting the books. `db.maintenance(fn)` lifts the guards
+  for one transaction (demo back-dating, reviewed repairs only).
+- **Migrations** are checksummed (`schema_migrations`): a migration edited after it ran refuses to start.
+- **Integrity check** (`lib/integrity.js`): nightly after the backup and on demand (Settings → سلامت داده‌ها):
+  SQLite `quick_check`, foreign keys, negative stock, reversal pairs, line arithmetic, stock picks vs.
+  ledger, returns ≤ shipped, statement totals = items, no key billed twice, one live statement per month.
+  Every unit test ends with it, so each scenario is also an invariant test.
+- **Idempotent writes** (`lib/idempotency.js`): the browser sends `Idempotency-Key` with every write and
+  resends the same key after a dropped connection or a 503; the server replays the stored answer
+  (`Idempotent-Replayed: true`), 409 `in_progress` while the first copy runs, 422 if the key is reused for
+  a different request. Keys are per user, kept 24 h; 5xx answers are not stored.
+- **Optimistic locking** (`lib/concurrency.js`): companies, products, listings, users and warehouses carry
+  `version`; forms send `If-Match`; every edit is `UPDATE … WHERE id = ? AND version = ?`; a lost race is
+  409 `stale` with the name of whoever saved first.
+- **Sync resilience**: WooCommerce calls retry time-outs, dropped connections, 429 and 5xx (exponential
+  back-off with jitter, `Retry-After`, 2 retries); a company whose runs keep failing backs off 2, 4, 8 …
+  60 minutes (`sync_failures`, `next_sync_at`). Plugin pushes are accepted once (replayed signatures → 409).
+- **Operations**: `/health` (liveness), `/ready` (database reachable, not stopping), `/metrics`
+  (Prometheus text, only with `METRICS_TOKEN`): HTTP rate/latency per route, sync runs and duration,
+  WooCommerce outcomes, webhooks, SSE clients, open tasks, failing companies, backup age, integrity.
+  Every response carries `X-Request-Id` (Caddy's id is kept), logged as `request_id`; secrets are redacted
+  from logs. Requests over 2 s are logged.
+- **Graceful stop** (`app.shutdown()`, SIGTERM): `/ready` → 503, the scheduler stops, running syncs finish
+  (up to `SHUTDOWN_TIMEOUT_MS`), live streams end (browsers reconnect), in-flight requests complete, the
+  WAL is checkpointed. Compose uses `init: true` and a 40 s grace period.
+- **Configuration** is validated with zod at start-up (`config.js`); a bad variable names itself.
+- **Performance**: `npm run bench` (see `docs/performance.md`). Intl formatters are created once;
+  dashboard/overview statement totals are cached by the newest audit id.
+- Decisions with their reasons: `docs/adr/`.
+
 ## Security
 - Passwords: scrypt. Sessions: random token in an httpOnly, SameSite=Strict cookie (12 h sliding),
   only the hash stored. Non-GET API calls need `X-Anbar: 1`. Login rate-limited per IP and username.

@@ -119,6 +119,24 @@ function createStatements({ db, audit, events }) {
     return { sections, totals };
   }
 
+  /**
+   * Draft totals for the dashboard and the overview, cached. Amounts change only through a
+   * person's action (an order, a receipt, a return, a price correction, a statement), and every
+   * such action writes an audit row first, so the newest audit id is the cache key; 60 s is the
+   * upper bound for anything else. Issuing always computes fresh.
+   */
+  const totalsCache = new Map();
+  function totals(companyId, month) {
+    const stamp = db.get('SELECT MAX(id) AS id FROM audit_log').id || 0;
+    const key = `${companyId}:${month}`;
+    const hit = totalsCache.get(key);
+    if (hit && hit.stamp === stamp && Date.now() - hit.at < 60e3) return hit.totals;
+    const value = compute(companyId, month).totals;
+    if (totalsCache.size > 500) totalsCache.clear();
+    totalsCache.set(key, { stamp, at: Date.now(), totals: value });
+    return value;
+  }
+
   /** Facts shown next to the money: what is still open, surplus movements, stock left. */
   function facts(companyId, month) {
     const { start, end } = monthBounds(month);
@@ -231,8 +249,8 @@ function createStatements({ db, audit, events }) {
     const lastMonth = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
     return db.all('SELECT * FROM companies WHERE active = 1 ORDER BY name').map((c) => {
       const s = active(c.id, lastMonth);
-      const draftLast = s ? null : compute(c.id, lastMonth).totals.total;
-      const draftThis = compute(c.id, thisMonth).totals.total;
+      const draftLast = s ? null : totals(c.id, lastMonth).total;
+      const draftThis = totals(c.id, thisMonth).total;
       const unpaid = db.all("SELECT id, month, total FROM statements WHERE company_id = ? AND status = 'issued' ORDER BY month", c.id);
       return {
         id: c.id, name: c.name, currency: c.currency, last_month: lastMonth, last_month_label: monthLabel(lastMonth), this_month: thisMonth, this_month_label: monthLabel(thisMonth),
@@ -298,7 +316,7 @@ function createStatements({ db, audit, events }) {
     return Buffer.from(await wb.xlsx.writeBuffer());
   }
 
-  return { compute, view, issue, markPaid, voidStatement, overview, excel, currentItems, SECTIONS };
+  return { compute, totals, view, issue, markPaid, voidStatement, overview, excel, currentItems, SECTIONS };
 }
 
 module.exports = { createStatements, SECTIONS };

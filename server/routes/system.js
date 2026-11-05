@@ -1,5 +1,5 @@
 'use strict';
-/** System health and backups (manager only). */
+/** System health, backups and the integrity check (manager only). */
 const fs = require('fs');
 const path = require('path');
 const { notFound } = require('../lib/util');
@@ -8,7 +8,7 @@ const pkg = require('../../package.json');
 const started = new Date().toISOString();
 
 module.exports = async function systemRoutes(app) {
-  const { db, backups, config, settings } = app.ctx;
+  const { db, backups, config, settings, integrity } = app.ctx;
   const manager = { config: { manager: true } };
 
   app.get('/system', manager, async () => {
@@ -20,8 +20,23 @@ module.exports = async function systemRoutes(app) {
     return {
       version: pkg.version, node: process.version, started_at: started, production: config.production, public_url: config.publicUrl || null,
       db_size: size, counts, backups: backups.list(), backup_keep: settings.get('backup_keep'),
-      migrations: db.get('PRAGMA user_version').user_version
+      migrations: db.get('PRAGMA user_version').user_version,
+      integrity: integrity.last()
     };
+  });
+
+  /** The last integrity report (it runs every night after the backup). */
+  app.get('/system/integrity', manager, async () => ({ report: integrity.last() }));
+
+  /** Runs the integrity check now. */
+  app.post('/system/integrity', manager, async (req) => {
+    const report = integrity.run();
+    const failed = report.results.filter((c) => !c.ok);
+    app.ctx.audit(req, {
+      action: 'check', entity: 'settings', id: null,
+      summary: failed.length ? `بررسی سلامت داده‌ها: ${failed.length} مورد مشکل (${failed.map((c) => c.label).join('، ')})` : 'بررسی سلامت داده‌ها: همه‌چیز درست است'
+    });
+    return { report };
   });
 
   app.post('/system/backup', manager, async (req) => {

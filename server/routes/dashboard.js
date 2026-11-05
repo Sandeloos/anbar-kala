@@ -55,7 +55,7 @@ module.exports = async function dashboardRoutes(app) {
     }
     const month = monthOf(new Date().toISOString());
     const accounts = db.all('SELECT id, name, currency FROM companies WHERE active = 1 ORDER BY name')
-      .map((c) => ({ ...c, month, month_label: monthLabel(month), total: statements.compute(c.id, month).totals.total }));
+      .map((c) => ({ ...c, month, month_label: monthLabel(month), total: statements.totals(c.id, month).total }));
     return {
       ops, days, accounts,
       products: {

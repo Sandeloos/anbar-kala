@@ -41,7 +41,7 @@ export async function render(view) {
       const btn = $('button[type=submit]', f);
       busy(btn, true);
       try {
-        items = (w ? await put(`/warehouses/${w.id}`, v) : await post('/warehouses', v)).items;
+        items = (w ? await put(`/warehouses/${w.id}`, v, { version: w.version }) : await post('/warehouses', v)).items;
         closeSheet();
         paint();
         toast('انبار ذخیره شد.');

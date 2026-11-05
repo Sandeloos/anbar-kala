@@ -5,6 +5,7 @@
  * from server/migrations applied in order and tracked in PRAGMA user_version.
  */
 const fs = require('fs');
+const crypto = require('crypto');
 const path = require('path');
 
 // node:sqlite still prints an "experimental" warning on Node 22; it is stable enough here
@@ -33,7 +34,7 @@ function args(params) {
 function openDatabase(file) {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
   const raw = new DatabaseSync(file);
-  raw.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA synchronous = NORMAL;');
+  raw.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -20000;');
 
   const cache = new Map();
   const stmt = (sql) => {
@@ -65,22 +66,54 @@ function openDatabase(file) {
         depth--;
       }
     },
-    close: () => raw.close()
+    /**
+     * Runs fn with the append-only guards lifted (the triggers check the maintenance table).
+     * For demo/test back-dating and deliberate data repairs only; never from a request.
+     */
+    maintenance(fn) {
+      return db.tx(() => {
+        raw.exec('INSERT OR IGNORE INTO maintenance (id) VALUES (1)');
+        try { return fn(); } finally { raw.exec('DELETE FROM maintenance'); }
+      });
+    },
+    /** Flushes the write-ahead log and lets SQLite refresh its query statistics. */
+    close: () => {
+      try { raw.exec('PRAGMA optimize; PRAGMA wal_checkpoint(TRUNCATE);'); } catch { /* read-only or already closed */ }
+      raw.close();
+    }
   };
   migrate(db);
   return db;
 }
 
+/**
+ * Applies new migrations in order, each in its own transaction, and remembers a checksum of
+ * every applied file in schema_migrations. Editing a migration that already ran is refused at
+ * start-up (the database and the code would disagree silently); add a new migration instead.
+ */
 function migrate(db) {
+  db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL)`);
   const current = db.get('PRAGMA user_version').user_version;
   const files = fs.readdirSync(MIGRATIONS).filter((f) => /^\d+_.+\.sql$/.test(f)).sort();
   for (const file of files) {
     const version = parseInt(file, 10);
-    if (version <= current) continue;
     const sql = fs.readFileSync(path.join(MIGRATIONS, file), 'utf8');
+    const checksum = crypto.createHash('sha256').update(sql.replace(/\r\n/g, '\n')).digest('hex');
+    if (version <= current) {
+      const row = db.get('SELECT checksum FROM schema_migrations WHERE version = ?', version);
+      if (!row) {
+        // Databases created before checksums were recorded: remember what is there now
+        db.run('INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)', version, file, checksum, new Date().toISOString());
+      } else if (row.checksum !== checksum) {
+        throw new Error(`Migration ${file} changed after it was applied to this database. Restore the file and add a new migration instead.`);
+      }
+      continue;
+    }
     db.tx(() => {
       db.exec(sql);
       db.exec(`PRAGMA user_version = ${version}`);
+      db.run('INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)', version, file, checksum, new Date().toISOString());
     });
   }
 }
