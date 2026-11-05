@@ -9,7 +9,8 @@ const { badRequest, notFound, clampInt, searchKey } = require('../lib/util');
 
 const KIND_LABEL = {
   surplus_in: 'اضافه‌ی رسیده', wrong_in: 'کالای اشتباه رسیده', own_in: 'ورود کالای خودمان', ship_out: 'ارسال برای سفارش',
-  return_to_company: 'برگشت به شرکت', transfer_out: 'انتقال (خروج)', transfer_in: 'انتقال (ورود)', adjust: 'اصلاح موجودی', reversal: 'برگرداندن'
+  return_to_company: 'برگشت به شرکت', transfer_out: 'انتقال (خروج)', transfer_in: 'انتقال (ورود)', adjust: 'اصلاح موجودی', reversal: 'برگرداندن',
+  return_in: 'مرجوعی مشتری', write_off: 'معیوب (حذف از موجودی)', count: 'انبارگردانی'
 };
 
 module.exports = async function stockRoutes(app) {
@@ -112,6 +113,34 @@ module.exports = async function stockRoutes(app) {
       audit(req, { action: 'stock', entity: 'product', id: p.id, summary: `انتقال ${b.units} عدد «${p.name}» (مال ${ownerName(b.owner_company_id)}) از ${from.name} به ${to.name}` });
     });
     return done(req, 'ثبت شد', p.company_id);
+  });
+
+  /**
+   * Stocktake of one warehouse: the counted units of each (product, owner) row. Every difference
+   * becomes one 'count' correction; rows not sent are left as they are.
+   */
+  app.post('/stock/count', async (req) => {
+    const b = z.object({
+      warehouse_id: base.warehouse_id,
+      note: optText(500).optional(),
+      counts: z.array(z.object({ product_id: z.number().int(), owner_company_id: z.number().int().nullable(), counted: z.number().int().min(0) })).min(1, 'هیچ شمارشی وارد نشده.').max(5000)
+    }).parse(req.body || {});
+    const w = warehouse(b.warehouse_id);
+    let changed = 0, plus = 0, minus = 0;
+    db.tx(() => {
+      for (const c of b.counts) {
+        const p = product(c.product_id);
+        const have = orders.balance(p.id, w.id, c.owner_company_id);
+        const diff = c.counted - have;
+        if (!diff) continue;
+        orders.move({ productId: p.id, warehouseId: w.id, ownerId: c.owner_company_id, units: diff, kind: 'count', userId: req.user.id, note: `انبارگردانی${b.note ? ` — ${b.note}` : ''} (سیستم ${have}، شمارش ${c.counted})` });
+        changed++;
+        if (diff > 0) plus += diff; else minus -= diff;
+      }
+      audit(req, { action: 'stock', entity: 'warehouse', id: w.id, summary: `انبارگردانی ${w.name}: ${b.counts.length} ردیف شمرده شد، ${changed} ردیف اصلاح شد (${plus} عدد اضافه، ${minus} عدد کم)${b.note ? ` — ${b.note}` : ''}` });
+    });
+    events.emit('stock', {});
+    return { counted: b.counts.length, changed, plus, minus };
   });
 
   /** A correction after counting (+ or −), always with a reason. */

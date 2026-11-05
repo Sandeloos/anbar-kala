@@ -16,7 +16,7 @@ export async function render(view, ctx) {
   view.innerHTML = `
     <div class="page-head">
       <div><h1>موجودی انبار</h1><p>هر ردیف: کالا، صاحبش (یکی از شرکت‌ها یا خودمان) و انباری که در آن است. همه به عدد.</p></div>
-      <div class="page-actions"><button class="btn btn-primary" type="button" data-own-in>${icon('plus')}ورود کالای خودمان</button></div>
+      <div class="page-actions"><a class="btn" href="#/count">${icon('check')}انبارگردانی</a><button class="btn btn-primary" type="button" data-own-in>${icon('plus')}ورود کالای خودمان</button></div>
     </div>
     <div class="metrics" id="s-totals"></div>
     <div class="card toolbar">

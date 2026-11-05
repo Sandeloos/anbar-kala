@@ -48,3 +48,6 @@ decision taken with them: `docs/decisions.md` (Persian) — read it before chang
 - Phase 2: `lib/orders.js` (orders, receiving, stock rules), `lib/importer.js`, `lib/jalali.js` (server) and
   `public/assets/js/jalali.js` (browser, same algorithm), `public/assets/js/picker.js` (listing/product search),
   views `orders.js`, `receiving.js`, `stock.js`, `listings.js`, `import.js`.
+- Phase 3: `lib/returns.js`, `lib/statements.js` (statement math and Excel), views `returns.js`,
+  `statements.js`, `count.js` (stocktake). Issued statements are never edited: change data and let the
+  difference appear as an adjustment on the next statement. Download file names stay ASCII.

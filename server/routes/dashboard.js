@@ -39,7 +39,8 @@ module.exports = async function dashboardRoutes(app) {
                              WHERE l.status = 'pending' AND o.cancelled_at IS NULL AND o.ordered_at < ?`, todayStart).n,
       received_today: db.get("SELECT COUNT(*) AS n FROM order_lines WHERE status <> 'pending' AND received_at >= ?", todayStart).n,
       consigned_units: db.get('SELECT COALESCE(SUM(units), 0) AS n FROM stock_moves WHERE owner_company_id IS NOT NULL').n,
-      own_units: db.get('SELECT COALESCE(SUM(units), 0) AS n FROM stock_moves WHERE owner_company_id IS NULL').n
+      own_units: db.get('SELECT COALESCE(SUM(units), 0) AS n FROM stock_moves WHERE owner_company_id IS NULL').n,
+      returns_waiting: db.get('SELECT COUNT(*) AS n FROM returns WHERE disposition IS NULL AND voided_at IS NULL').n
     };
     return {
       ops,
@@ -59,6 +60,7 @@ module.exports = async function dashboardRoutes(app) {
       needs_setup: db.get('SELECT COUNT(*) AS n FROM products WHERE removed_at IS NULL AND configured_at IS NULL').n,
       sync_errors: db.get("SELECT COUNT(*) AS n FROM companies WHERE active = 1 AND sync_state = 'error'").n,
       price_changes_24h: db.get("SELECT COUNT(*) AS n FROM price_history WHERE price_changed = 1 AND source <> 'import' AND observed_at >= ?", day).n,
+      returns_waiting: db.get('SELECT COUNT(*) AS n FROM returns WHERE disposition IS NULL AND voided_at IS NULL').n,
       // Lines of orders placed before today that nobody has received yet
       receiving_due: db.get(`SELECT COUNT(*) AS n FROM order_lines l JOIN orders o ON o.id = l.order_id
                              WHERE l.status = 'pending' AND o.cancelled_at IS NULL AND o.ordered_at < ?`, dayStart(tehranDay(new Date().toISOString()).date)).n

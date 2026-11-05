@@ -96,4 +96,48 @@ function tehranDay(iso) {
 /** Start of a Tehran calendar day (Gregorian 'YYYY-MM-DD') as ISO UTC */
 const dayStart = (date) => new Date(`${date}T00:00:00${TEHRAN_OFFSET}`).toISOString();
 
-module.exports = { toJalali, toGregorian, parseDateTime, wall, tehranDay, dayStart, TEHRAN_OFFSET };
+const MONTHS = ['فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور', 'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند'];
+const FA = (s) => String(s).replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d]);
+
+/** The Jalali month ("1405-08") an ISO time falls in, Tehran time. */
+function monthOf(iso) {
+  const [jy, jm] = tehranDay(iso).jalali;
+  return `${jy}-${pad(jm)}`;
+}
+/** "1405-08" → { start, end } ISO UTC (end exclusive) */
+function monthBounds(month) {
+  const [jy, jm] = month.split('-').map(Number);
+  const [gy, gm, gd] = toGregorian(jy, jm, 1);
+  const [ny, nm] = jm === 12 ? [jy + 1, 1] : [jy, jm + 1];
+  const [ey, em, ed] = toGregorian(ny, nm, 1);
+  return { start: wall(gy, gm, gd), end: wall(ey, em, ed) };
+}
+/** "1405-08" → "آبان ۱۴۰۵" */
+function monthLabel(month) {
+  const [jy, jm] = month.split('-').map(Number);
+  return `${MONTHS[jm - 1]} ${FA(jy)}`;
+}
+const isMonth = (s) => /^\d{4}-(0[1-9]|1[0-2])$/.test(String(s || ''));
+/** Months from `from` to `to` inclusive, newest first. */
+function monthsBetween(from, to) {
+  const out = [];
+  let [y, m] = to.split('-').map(Number);
+  const [fy, fm] = from.split('-').map(Number);
+  while (y > fy || (y === fy && m >= fm)) {
+    out.push(`${y}-${pad(m)}`);
+    m--; if (m === 0) { m = 12; y--; }
+    if (out.length > 240) break;
+  }
+  return out;
+}
+/** "1404/09/03 ۱۴:۲۰" style label for spreadsheets */
+function jalaliDateTime(iso) {
+  const { jalali: [y, m, d] } = tehranDay(iso);
+  const t = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Tehran', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(iso));
+  return `${y}/${pad(m)}/${pad(d)} ${t}`;
+}
+
+module.exports = {
+  toJalali, toGregorian, parseDateTime, wall, tehranDay, dayStart, TEHRAN_OFFSET,
+  MONTHS, monthOf, monthBounds, monthLabel, isMonth, monthsBetween, jalaliDateTime
+};

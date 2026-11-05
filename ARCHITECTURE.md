@@ -38,6 +38,16 @@
 - Import (`lib/importer.js`, `routes/imports.js`): xlsx/csv → column mapping (guessed from Persian
   headers, saved per platform) → preview → listings for unknown codes → orders.
 
+## Returns and statements (phase 3)
+- `returns` (`lib/returns.js`): a customer return enters our warehouse as our own stock (`return_in`);
+  decided as kept / to_company (`return_to_company` move, `value` credited) / damaged (`write_off`).
+  Credits only up to units the company was paid for (its shipment + picks from its surplus).
+- `statements` + `statement_items` (`lib/statements.js`): billable keys `L<line>` (company shipment),
+  `M<move>` (sold from company surplus), `R<return>` (credit). A month's draft = this month's keys not yet
+  billed + adjustments for earlier keys (current value − what non-void statements billed). Issuing
+  freezes the items; voiding (manager, latest unpaid only) un-bills them. Excel via exceljs (RTL sheet).
+- Stocktake: `POST /stock/count` turns counted numbers into `count` moves.
+
 ## Sync
 - **full**: every product page (100 per request, `_fields` trimmed) + variations of variable products
   (4 parents in parallel); items the site no longer lists get `removed_at`.

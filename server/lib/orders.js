@@ -188,7 +188,7 @@ function createOrders({ db, sync, events, audit }) {
   }
 
   /** Writes one ledger row after checking the balance cannot go below zero. */
-  function move({ productId, warehouseId, ownerId = null, units, kind, lineId = null, arrivalId = null, value = null, note = null, userId = null, reverses = null }) {
+  function move({ productId, warehouseId, ownerId = null, units, kind, lineId = null, arrivalId = null, returnId = null, value = null, note = null, userId = null, reverses = null }) {
     if (!units) return null;
     if (!db.get('SELECT 1 FROM warehouses WHERE id = ?', warehouseId)) throw badRequest('انبار پیدا نشد.');
     if (units < 0) {
@@ -198,9 +198,9 @@ function createOrders({ db, sync, events, audit }) {
         throw conflict(`موجودی «${p ? p.name : productId}» در این انبار کافی نیست (موجود: ${have} عدد، لازم: ${-units} عدد).`);
       }
     }
-    const id = Number(db.run(`INSERT INTO stock_moves (product_id, warehouse_id, owner_company_id, units, kind, order_line_id, arrival_id, value, reverses, note, user_id, created_at)
-                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    productId, warehouseId, ownerId ?? null, units, kind, lineId, arrivalId, value, reverses, note, userId, nowIso()).lastInsertRowid);
+    const id = Number(db.run(`INSERT INTO stock_moves (product_id, warehouse_id, owner_company_id, units, kind, order_line_id, arrival_id, return_id, value, reverses, note, user_id, created_at)
+                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    productId, warehouseId, ownerId ?? null, units, kind, lineId, arrivalId, returnId, value, reverses, note, userId, nowIso()).lastInsertRowid);
     if (reverses) db.run('UPDATE stock_moves SET reversed_by = ? WHERE id = ?', id, reverses);
     return id;
   }
@@ -372,7 +372,10 @@ function createOrders({ db, sync, events, audit }) {
     const result = db.tx(() => {
       const l = lineRow(lineId);
       if (l.status === 'pending') throw conflict('این ردیف هنوز منتظر دریافت است.');
-      const moves = db.all('SELECT * FROM stock_moves WHERE order_line_id = ? AND reversed_by IS NULL AND reverses IS NULL ORDER BY id DESC', l.id);
+      if (db.get('SELECT 1 FROM returns WHERE order_line_id = ? AND voided_at IS NULL', l.id)) {
+        throw conflict('برای این ردیف مرجوعی ثبت شده؛ اول مرجوعی را باطل کنید.');
+      }
+      const moves = db.all('SELECT * FROM stock_moves WHERE order_line_id = ? AND return_id IS NULL AND reversed_by IS NULL AND reverses IS NULL ORDER BY id DESC', l.id);
       for (const m of moves) {
         try {
           move({ productId: m.product_id, warehouseId: m.warehouse_id, ownerId: m.owner_company_id, units: -m.units, kind: 'reversal', lineId: l.id, reverses: m.id, userId, note: 'برگرداندن دریافت' });

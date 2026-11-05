@@ -17,6 +17,8 @@ const { createSecrets } = require('./lib/secrets');
 const { createSettings } = require('./lib/settings');
 const { createSync } = require('./lib/sync');
 const { createOrders } = require('./lib/orders');
+const { createReturns } = require('./lib/returns');
+const { createStatements } = require('./lib/statements');
 const { createJobs } = require('./jobs');
 const { HttpError } = require('./lib/util');
 
@@ -46,8 +48,10 @@ async function buildApp(config, { logger, fetchImpl } = {}) {
   const audit = createAudit(db, events);
   const sync = createSync({ db, config, secrets, events, log: app.log, fetchImpl });
   const orders = createOrders({ db, sync, events, audit });
+  const returns = createReturns({ db, orders, events, audit });
+  const statements = createStatements({ db, audit, events });
   const ctx = {
-    config, db, events, secrets, settings, audit, sync, orders,
+    config, db, events, secrets, settings, audit, sync, orders, returns, statements,
     auth: createAuth({ db, config }),
     limit: createLimiter({ factor: config.relaxLimits ? 100 : 1 })
   };
@@ -126,7 +130,7 @@ async function buildApp(config, { logger, fetchImpl } = {}) {
       const managerOnly = req.routeOptions.config && req.routeOptions.config.manager;
       if (managerOnly && req.user.role !== 'manager') throw new HttpError(403, 'این بخش فقط برای مدیر است.');
     });
-    for (const r of ['auth', 'me', 'users', 'companies', 'warehouses', 'products', 'listings', 'orders', 'receiving', 'stock', 'imports', 'activity', 'dashboard', 'settings', 'events']) {
+    for (const r of ['auth', 'me', 'users', 'companies', 'warehouses', 'products', 'listings', 'orders', 'receiving', 'stock', 'imports', 'returns', 'statements', 'activity', 'dashboard', 'settings', 'events']) {
       await api.register(require(`./routes/${r}`));
     }
   }, { prefix: '/api' });

@@ -12,7 +12,10 @@ const SECTIONS = [
   { group: 'کار روزانه', path: 'dashboard', label: 'داشبورد', icon: 'grid', load: () => import('./views/dashboard.js') },
   { group: 'کار روزانه', path: 'orders', label: 'سفارش‌ها', icon: 'cart', load: () => import('./views/orders.js') },
   { group: 'کار روزانه', path: 'receiving', label: 'دریافت روزانه', icon: 'truck', count: 'receiving_due', countTitle: 'ردیف منتظر دریافت', load: () => import('./views/receiving.js') },
+  { group: 'کار روزانه', path: 'returns', label: 'مرجوعی‌ها', icon: 'refresh', count: 'returns_waiting', countTitle: 'مرجوعی منتظر تصمیم', load: () => import('./views/returns.js') },
   { group: 'کار روزانه', path: 'stock', label: 'موجودی انبار', icon: 'layers', load: () => import('./views/stock.js') },
+  { group: 'تسویه', path: 'statements', label: 'صورت‌حساب‌ها', icon: 'receipt', load: () => import('./views/statements.js') },
+  { path: 'count', label: 'انبارگردانی', icon: 'layers', hidden: true, load: () => import('./views/count.js') },
   { group: 'کار روزانه', path: 'changes', label: 'تغییرات قیمت', icon: 'trend', count: 'price_changes_24h', countTitle: 'تغییر در ۲۴ ساعت', load: () => import('./views/changes.js') },
   { group: 'تعریف‌ها', path: 'products', label: 'کالاها', icon: 'box', count: 'needs_setup', countTitle: 'کالای تنظیم‌نشده', load: () => import('./views/products.js') },
   { group: 'تعریف‌ها', path: 'listings', label: 'آگهی‌ها', icon: 'link', load: () => import('./views/listings.js') },
@@ -223,6 +226,7 @@ window.addEventListener('hashchange', route);
 // Counters follow what happens anywhere (other admins, background sync)
 subscribe('products', refreshCountsSoon);
 subscribe('orders', refreshCountsSoon);
+subscribe('returns', refreshCountsSoon);
 subscribe('sync', (d) => { if (d.state !== 'progress') refreshCountsSoon(); });
 
 /* ------------------------------------------------------------ quick search (Ctrl+K) */

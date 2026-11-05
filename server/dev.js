@@ -66,7 +66,7 @@ async function demo(port) {
 function seedOrders(app) {
   const { db, orders } = app.ctx;
   const { nowIso, searchKey } = require('./lib/util');
-  db.run("UPDATE price_history SET effective_at = ? WHERE source = 'import'", new Date(Date.now() - 3 * 864e5).toISOString());
+  db.run("UPDATE price_history SET effective_at = ? WHERE source = 'import'", new Date(Date.now() - 70 * 864e5).toISOString());
   const manager = db.get("SELECT * FROM users WHERE username = 'demo'");
   const ali = db.get("SELECT * FROM users WHERE username = 'ali'");
   const as = (u) => ({ user: { id: u.id, name: u.name }, ip: '127.0.0.1' });
@@ -114,7 +114,34 @@ function seedOrders(app) {
   if (partial) tryReceive(partial.id, { outcome: 'excess', arrived_units: 100 });
   const sameProduct = partial && lineIds.map(lineOf).find((l) => l.product_id === partial.product_id && l.status === 'pending');
   if (sameProduct) tryReceive(sameProduct.id, { outcome: 'short', arrived_units: 0, rest: 'stock' });
-  console.log(`  demo: ${listings.length} listings, ${n} orders from yesterday`);
+  // Last month: orders received (so there is a statement to issue), and a few customer returns
+  const { monthOf, monthBounds } = require('./lib/jalali');
+  const thisMonth = monthOf(nowIso());
+  const [ty, tm] = thisMonth.split('-').map(Number);
+  const last = tm === 1 ? `${ty - 1}-12` : `${ty}-${String(tm - 1).padStart(2, '0')}`;
+  const lastStart = new Date(monthBounds(last).start).getTime();
+  const lastLines = [];
+  for (let i = 0; i < 30; i++) {
+    const a = listings[(i * 11 + 5) % listings.length];
+    try {
+      const id = orders.createOrder(as(i % 2 ? ali : manager), { platform_id: i % 3 === 2 ? 2 : 1, order_number: String(242900000 + i * 41),
+        ordered_at: new Date(lastStart + (i % 28) * 864e5 + (9 + (i % 10)) * 3600e3).toISOString(), lines: [{ listing_id: a.id, qty: 1 + (i % 4 === 0 ? 1 : 0), platform_price: 90000 + i * 3000 }] });
+      lastLines.push(...db.all('SELECT id FROM order_lines WHERE order_id = ?', id).map((r) => r.id));
+    } catch (err) { console.warn('demo order skipped:', err.message); }
+  }
+  lastLines.forEach((id) => tryReceive(id, { outcome: 'ok' }));
+  const { returns } = app.ctx;
+  const tryReturn = (lineId, units, reason, disposition) => {
+    try {
+      const r = returns.create(as(ali), lineId, { units, reason });
+      if (disposition) returns.decide(as(manager), r.id, { disposition });
+    } catch (err) { console.warn('demo return skipped:', err.message); }
+  };
+  const done = lastLines.map(lineOf).filter((l) => l.status === 'done');
+  if (done[0]) tryReturn(done[0].id, done[0].units_per_sale, 'مشتری منصرف شد', 'to_company');
+  if (done[1]) tryReturn(done[1].id, done[1].units_per_sale, 'آسیب دیده بود');
+  if (done[2]) tryReturn(done[2].id, done[2].units_per_sale, 'رنگ اشتباه');
+  console.log(`  demo: ${listings.length} listings, ${n} orders from yesterday, ${lastLines.length} lines last month`);
 }
 
 (async () => {

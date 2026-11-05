@@ -34,6 +34,7 @@ export async function render(view, ctx) {
         <a class="metric tone-green" href="#/changes">${icon('trend')}<strong>${fa(d.changes_24h.price)}</strong><span>تغییر قیمت در ۲۴ ساعت گذشته</span></a>
         <a class="metric tone-red" href="#/stock">${icon('layers')}<strong>${fa(d.ops.consigned_units)}</strong><span>عدد کالای امانی شرکت‌ها در انبار ما</span></a>
       </div>
+      ${d.ops.returns_waiting ? `<div class="callout callout-warn">${icon('refresh')}<span>${fa(d.ops.returns_waiting)} مرجوعی منتظر تصمیم است. <a class="link" href="#/returns">تعیین تکلیف</a></span></div>` : ''}
       ${d.products.needs_setup ? `<div class="callout callout-warn">${icon('edit')}<span>${fa(d.products.needs_setup)} کالا هنوز «تعداد در بسته»اش تأیید نشده. <a class="link" href="#/products?setup=guessed">بررسی و تأیید</a></span></div>` : ''}
       <div class="grid grid-main">
         <section class="card card-flush" aria-labelledby="dash-changes">

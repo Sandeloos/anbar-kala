@@ -403,7 +403,8 @@ async function renderOne(view, ctx, id) {
             <td class="col-num" data-label="مبلغ برای شرکت"><span class="price">${money(l.qty * l.settle_unit_price, l.currency)}</span>
               ${l.settle_manual ? `<div class="small"><span class="badge badge-orange">دستی</span> ${esc(l.settle_reason || '')}</div>` : ''}</td>
             <td data-label="دریافت">${lineStatus(l)}${receiveDetails(l)}</td>
-            <td class="col-actions"><button class="btn btn-sm" type="button" data-price="${l.id}">${icon('edit')}قیمت</button></td>
+            <td class="col-actions"><button class="btn btn-sm" type="button" data-price="${l.id}">${icon('edit')}قیمت</button>
+              ${l.units_from_company + l.units_from_stock > 0 ? `<button class="btn btn-sm btn-ghost" type="button" data-return="${l.id}">${icon('refresh')}مرجوعی</button>` : ''}</td>
           </tr>`).join('')}</tbody></table></div>
         <div class="table-foot"><span>جمع برای شرکت‌ها</span><span>${[...byCompany].map(([k, v]) => { const [n, c] = k.split('|'); return `${esc(n)}: <b class="price">${moneyText(v, c)}</b>`; }).join(' · ')}</span></div>
       </section>
@@ -424,6 +425,10 @@ async function renderOne(view, ctx, id) {
     const b = e.target.closest('button');
     if (!b) return;
     if (b.dataset.price) return priceSheet(d.lines.find((l) => l.id === Number(b.dataset.price)));
+    if (b.dataset.return) {
+      const [{ newReturn }, { items: warehouses }] = await Promise.all([import('./returns.js'), get('/warehouses')]);
+      return newReturn(ctx, warehouses, load, { orderId: id, lineId: Number(b.dataset.return) });
+    }
     if (b.hasAttribute('data-cancel')) {
       const body = openSheet('لغو سفارش', `<form class="form" id="f-cancel" novalidate>
         <p class="muted small">ردیف‌های منتظر دریافت لغو می‌شوند. اگر ردیفی دریافت شده، اول از «دریافت روزانه» آن را برگردانید.</p>

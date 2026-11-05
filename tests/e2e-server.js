@@ -32,5 +32,6 @@ const { createMockWoo } = require('../tools/mock-woo');
   one.pushTo({ url: `${config.publicUrl}/hooks/woo/${info.lastInsertRowid}`, secret: hook });
   await app.listen({ host: '127.0.0.1', port });
   await app.ctx.sync.fullSync(Number(info.lastInsertRowid));
+  db.run("UPDATE price_history SET effective_at = ? WHERE source = 'import'", new Date(Date.now() - 70 * 864e5).toISOString());
   console.log(`e2e server on ${port}`);
 })().catch((err) => { console.error(err); process.exit(1); });
