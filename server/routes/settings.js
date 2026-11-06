@@ -8,7 +8,7 @@ const LABELS = {
 };
 
 module.exports = async function settingsRoutes(app) {
-  const { settings, audit } = app.ctx;
+  const { db, settings, audit } = app.ctx;
 
   app.get('/settings', async () => ({ settings: settings.all(), limits: settings.LIMITS }));
 
@@ -21,9 +21,12 @@ module.exports = async function settingsRoutes(app) {
       backup_keep: intIn('تعداد نسخه‌های پشتیبان', ...L.backup_keep).optional()
     }).parse(req.body || {});
     const before = settings.all();
-    const after = settings.set(body);
-    const changes = audit.diff(before, after, LABELS);
-    if (changes.length) audit(req, { action: 'update', entity: 'settings', id: null, summary: 'تغییر تنظیمات', changes });
+    const after = db.tx(() => {
+      const next = settings.set(body);
+      const changes = audit.diff(before, next, LABELS);
+      if (changes.length) audit(req, { action: 'update', entity: 'settings', id: null, summary: 'تغییر تنظیمات', changes });
+      return next;
+    });
     return { settings: after, limits: L };
   });
 };

@@ -221,9 +221,14 @@ function createStatements({ db, audit, events }) {
     if (!s) throw notFound('صورت‌حساب پیدا نشد.');
     if (s.status !== 'issued') throw conflict(s.status === 'paid' ? 'این صورت‌حساب قبلاً تسویه شده است.' : 'این صورت‌حساب باطل شده است.');
     const c = company(s.company_id);
-    db.run("UPDATE statements SET status = 'paid', paid_at = ?, paid_reference = ?, paid_by = ? WHERE id = ?", paidAt || nowIso(), reference || null, req.user.id, s.id);
-    audit(req, { action: 'paid', entity: 'statement', id: s.id, summary: `تسویه‌ی صورت‌حساب ${monthLabel(s.month)} ${c.name}${reference ? ` — ${reference}` : ''}` });
-    events.emit('statements', { companyId: s.company_id, month: s.month });
+    db.tx(() => {
+      // Only an issued statement moves to paid, even if two people press the button together
+      const changed = db.run("UPDATE statements SET status = 'paid', paid_at = ?, paid_reference = ?, paid_by = ? WHERE id = ? AND status = 'issued'",
+        paidAt || nowIso(), reference || null, req.user.id, s.id).changes;
+      if (!changed) throw conflict('وضعیت این صورت‌حساب همین الان عوض شد؛ صفحه را تازه کنید.');
+      audit(req, { action: 'paid', entity: 'statement', id: s.id, summary: `تسویه‌ی صورت‌حساب ${monthLabel(s.month)} ${c.name}${reference ? ` — ${reference}` : ''}` });
+      events.emit('statements', { companyId: s.company_id, month: s.month });
+    });
   }
 
   /** Manager only: the latest issued statement of a company can be voided (its items become unbilled again). */
@@ -236,9 +241,13 @@ function createStatements({ db, audit, events }) {
     const later = db.get("SELECT month FROM statements WHERE company_id = ? AND month > ? AND status <> 'void'", s.company_id, s.month);
     if (later) throw conflict(`اول صورت‌حساب ${monthLabel(later.month)} را باطل کنید؛ فقط آخرین صورت‌حساب باطل می‌شود.`);
     const c = company(s.company_id);
-    db.run("UPDATE statements SET status = 'void', void_at = ?, void_reason = ?, void_by = ? WHERE id = ?", nowIso(), reason, req.user.id, s.id);
-    audit(req, { action: 'void', entity: 'statement', id: s.id, summary: `ابطال صورت‌حساب ${monthLabel(s.month)} ${c.name} — دلیل: ${reason}` });
-    events.emit('statements', { companyId: s.company_id, month: s.month });
+    db.tx(() => {
+      const changed = db.run("UPDATE statements SET status = 'void', void_at = ?, void_reason = ?, void_by = ? WHERE id = ? AND status = 'issued'",
+        nowIso(), reason, req.user.id, s.id).changes;
+      if (!changed) throw conflict('وضعیت این صورت‌حساب همین الان عوض شد؛ صفحه را تازه کنید.');
+      audit(req, { action: 'void', entity: 'statement', id: s.id, summary: `ابطال صورت‌حساب ${monthLabel(s.month)} ${c.name} — دلیل: ${reason}` });
+      events.emit('statements', { companyId: s.company_id, month: s.month });
+    });
   }
 
   /** One row per active company: last month's draft or statement, unpaid statements. */

@@ -1,20 +1,16 @@
 'use strict';
 /**
  * Stock in our warehouses by product, warehouse and owner (a partner company or us), its
- * movements, and the manual operations: our own goods in, surplus back to the company,
- * transfer between warehouses, correction.
+ * movements (read side), and the manual operations, which the ledger (lib/stock.js) carries out:
+ * our own goods in, surplus back to the company, transfer between warehouses, stocktake, correction.
  */
 const { z, text, optText, intIn } = require('./validate');
-const { badRequest, notFound, clampInt, searchKey } = require('../lib/util');
+const { clampInt, searchKey } = require('../lib/util');
 
-const KIND_LABEL = {
-  surplus_in: 'اضافه‌ی رسیده', wrong_in: 'کالای اشتباه رسیده', own_in: 'ورود کالای خودمان', ship_out: 'ارسال برای سفارش',
-  return_to_company: 'برگشت به شرکت', transfer_out: 'انتقال (خروج)', transfer_in: 'انتقال (ورود)', adjust: 'اصلاح موجودی', reversal: 'برگرداندن',
-  return_in: 'مرجوعی مشتری', write_off: 'معیوب (حذف از موجودی)', count: 'انبارگردانی'
-};
+const { KIND_LABEL } = require('../lib/stock');
 
 module.exports = async function stockRoutes(app) {
-  const { db, orders, audit, events } = app.ctx;
+  const { db, stock } = app.ctx;
 
   app.get('/stock', async (req) => {
     const q = req.query || {};
@@ -54,17 +50,6 @@ module.exports = async function stockRoutes(app) {
     return { items: items.map((m) => ({ ...m, kind_label: KIND_LABEL[m.kind] || m.kind })), total, page, pages: Math.max(1, Math.ceil(total / per)) };
   });
 
-  const product = (id) => {
-    const p = db.get('SELECT p.*, c.name AS company_name FROM products p JOIN companies c ON c.id = p.company_id WHERE p.id = ?', id);
-    if (!p) throw notFound('کالا پیدا نشد.');
-    return p;
-  };
-  const warehouse = (id) => {
-    const w = db.get('SELECT * FROM warehouses WHERE id = ?', id);
-    if (!w) throw badRequest('انبار پیدا نشد.', { warehouse_id: 'پیدا نشد.' });
-    return w;
-  };
-  const ownerName = (id) => (id ? (db.get('SELECT name FROM companies WHERE id = ?', id) || {}).name : 'خودمان');
   const base = {
     product_id: intIn('کالا', 1, 1e12),
     warehouse_id: intIn('انبار', 1, 1e9),
@@ -72,91 +57,37 @@ module.exports = async function stockRoutes(app) {
     note: optText(500).optional()
   };
   const owner = z.preprocess((v) => (v === 'own' || v === '' || v === null || v === undefined ? null : Number(v)), z.number().int().nullable());
-  function done(req, summary, companyId) {
-    events.emit('stock', { companyId });
-    return { ok: true, summary };
-  }
+  const ok = () => ({ ok: true, summary: 'ثبت شد' });
 
   /** Our own goods (bought, not consigned) into a warehouse. */
-  app.post('/stock/own-in', async (req) => {
-    const b = z.object(base).parse(req.body || {});
-    const p = product(b.product_id);
-    const w = warehouse(b.warehouse_id);
-    db.tx(() => {
-      orders.move({ productId: p.id, warehouseId: w.id, ownerId: null, units: b.units, kind: 'own_in', note: b.note, userId: req.user.id });
-      audit(req, { action: 'stock', entity: 'product', id: p.id, summary: `ورود ${b.units} عدد «${p.name}» (کالای خودمان) به انبار ${w.name}${b.note ? ` — ${b.note}` : ''}` });
-    });
-    return done(req, 'ثبت شد', p.company_id);
-  });
+  app.post('/stock/own-in', async (req) => { stock.ownIn(req, z.object(base).parse(req.body || {})); return ok(); });
 
   /** Surplus that belongs to a company goes back to it. */
   app.post('/stock/return', async (req) => {
-    const b = z.object({ ...base, owner_company_id: intIn('صاحب کالا', 1, 1e9) }).parse(req.body || {});
-    const p = product(b.product_id);
-    const w = warehouse(b.warehouse_id);
-    db.tx(() => {
-      orders.move({ productId: p.id, warehouseId: w.id, ownerId: b.owner_company_id, units: -b.units, kind: 'return_to_company', note: b.note, userId: req.user.id });
-      audit(req, { action: 'stock', entity: 'product', id: p.id, summary: `برگشت ${b.units} عدد «${p.name}» از انبار ${w.name} به ${ownerName(b.owner_company_id)}${b.note ? ` — ${b.note}` : ''}` });
-    });
-    return done(req, 'ثبت شد', p.company_id);
+    stock.returnToCompany(req, z.object({ ...base, owner_company_id: intIn('صاحب کالا', 1, 1e9) }).parse(req.body || {}));
+    return ok();
   });
 
   app.post('/stock/transfer', async (req) => {
-    const b = z.object({ ...base, to_warehouse_id: intIn('انبار مقصد', 1, 1e9), owner_company_id: owner }).parse(req.body || {});
-    if (b.to_warehouse_id === b.warehouse_id) throw badRequest('انبار مبدأ و مقصد یکی است.', { to_warehouse_id: 'همان انبار مبدأ است.' });
-    const p = product(b.product_id);
-    const from = warehouse(b.warehouse_id);
-    const to = warehouse(b.to_warehouse_id);
-    db.tx(() => {
-      orders.move({ productId: p.id, warehouseId: from.id, ownerId: b.owner_company_id, units: -b.units, kind: 'transfer_out', note: b.note, userId: req.user.id });
-      orders.move({ productId: p.id, warehouseId: to.id, ownerId: b.owner_company_id, units: b.units, kind: 'transfer_in', note: b.note, userId: req.user.id });
-      audit(req, { action: 'stock', entity: 'product', id: p.id, summary: `انتقال ${b.units} عدد «${p.name}» (مال ${ownerName(b.owner_company_id)}) از ${from.name} به ${to.name}` });
-    });
-    return done(req, 'ثبت شد', p.company_id);
+    stock.transfer(req, z.object({ ...base, to_warehouse_id: intIn('انبار مقصد', 1, 1e9), owner_company_id: owner }).parse(req.body || {}));
+    return ok();
   });
 
-  /**
-   * Stocktake of one warehouse: the counted units of each (product, owner) row. Every difference
-   * becomes one 'count' correction; rows not sent are left as they are.
-   */
-  app.post('/stock/count', async (req) => {
-    const b = z.object({
-      warehouse_id: base.warehouse_id,
-      note: optText(500).optional(),
-      counts: z.array(z.object({ product_id: z.number().int(), owner_company_id: z.number().int().nullable(), counted: z.number().int().min(0) })).min(1, 'هیچ شمارشی وارد نشده.').max(5000)
-    }).parse(req.body || {});
-    const w = warehouse(b.warehouse_id);
-    let changed = 0, plus = 0, minus = 0;
-    db.tx(() => {
-      for (const c of b.counts) {
-        const p = product(c.product_id);
-        const have = orders.balance(p.id, w.id, c.owner_company_id);
-        const diff = c.counted - have;
-        if (!diff) continue;
-        orders.move({ productId: p.id, warehouseId: w.id, ownerId: c.owner_company_id, units: diff, kind: 'count', userId: req.user.id, note: `انبارگردانی${b.note ? ` — ${b.note}` : ''} (سیستم ${have}، شمارش ${c.counted})` });
-        changed++;
-        if (diff > 0) plus += diff; else minus -= diff;
-      }
-      audit(req, { action: 'stock', entity: 'warehouse', id: w.id, summary: `انبارگردانی ${w.name}: ${b.counts.length} ردیف شمرده شد، ${changed} ردیف اصلاح شد (${plus} عدد اضافه، ${minus} عدد کم)${b.note ? ` — ${b.note}` : ''}` });
-    });
-    events.emit('stock', {});
-    return { counted: b.counts.length, changed, plus, minus };
-  });
+  /** Stocktake of one warehouse (see stock.count). */
+  app.post('/stock/count', async (req) => stock.count(req, z.object({
+    warehouse_id: base.warehouse_id,
+    note: optText(500).optional(),
+    counts: z.array(z.object({ product_id: z.number().int(), owner_company_id: z.number().int().nullable(), counted: z.number().int().min(0) })).min(1, 'هیچ شمارشی وارد نشده.').max(5000)
+  }).parse(req.body || {})));
 
   /** A correction after counting (+ or −), always with a reason. */
   app.post('/stock/adjust', async (req) => {
-    const b = z.object({
+    stock.adjust(req, z.object({
       product_id: base.product_id, warehouse_id: base.warehouse_id, owner_company_id: owner,
       units: z.preprocess((v) => Number(v), z.number().int().refine((n) => n !== 0, 'تغییر نمی‌تواند صفر باشد.')),
       note: text('دلیل اصلاح', 500)
-    }).parse(req.body || {});
-    const p = product(b.product_id);
-    const w = warehouse(b.warehouse_id);
-    db.tx(() => {
-      orders.move({ productId: p.id, warehouseId: w.id, ownerId: b.owner_company_id, units: b.units, kind: 'adjust', note: b.note, userId: req.user.id });
-      audit(req, { action: 'stock', entity: 'product', id: p.id, summary: `اصلاح موجودی «${p.name}» (مال ${ownerName(b.owner_company_id)}) در ${w.name}: ${b.units > 0 ? '+' : ''}${b.units} عدد — دلیل: ${b.note}` });
-    });
-    return done(req, 'ثبت شد', p.company_id);
+    }).parse(req.body || {}));
+    return ok();
   });
 };
 

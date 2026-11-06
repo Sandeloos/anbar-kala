@@ -35,12 +35,15 @@ module.exports = async function userRoutes(app) {
     const body = z.object({ name: text('نام', 80), username, role: ROLE, phone: phone.optional(), email: email.optional() }).parse(req.body || {});
     if (db.get('SELECT 1 FROM users WHERE username = ?', body.username)) throw conflict('این نام کاربری قبلاً گرفته شده است.', { username: 'تکراری است.' });
     const pw = tempPassword();
+    const hash = await hashPassword(pw);
     const now = nowIso();
-    const info = db.run(`INSERT INTO users (username, name, role, phone, email, password_hash, must_change_password, created_at, updated_at)
-                         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
-    body.username, body.name, body.role, body.phone ?? null, body.email ?? null, await hashPassword(pw), now, now);
-    const id = Number(info.lastInsertRowid);
-    audit(req, { action: 'create', entity: 'user', id, summary: `افزودن کاربر «${body.name}» (${ROLE_LABEL[body.role]})` });
+    const id = db.tx(() => {
+      const uid = Number(db.run(`INSERT INTO users (username, name, role, phone, email, password_hash, must_change_password, created_at, updated_at)
+                                 VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+      body.username, body.name, body.role, body.phone ?? null, body.email ?? null, hash, now, now).lastInsertRowid);
+      audit(req, { action: 'create', entity: 'user', id: uid, summary: `افزودن کاربر «${body.name}» (${ROLE_LABEL[body.role]})` });
+      return uid;
+    });
     return { user: row(db.get('SELECT * FROM users WHERE id = ?', id)), temp_password: pw };
   });
 
@@ -64,11 +67,13 @@ module.exports = async function userRoutes(app) {
     const changes = audit.diff({ ...before, role: ROLE_LABEL[before.role], active: before.active ? 'بله' : 'خیر' },
       { ...after, role: ROLE_LABEL[after.role], active: after.active ? 'بله' : 'خیر' }, FIELDS);
     if (changes.length) {
-      db.run('UPDATE users SET name = ?, username = ?, role = ?, phone = ?, email = ?, active = ?, updated_at = ?, version = version + 1 WHERE id = ? AND version = ?',
-        after.name, after.username, after.role, after.phone, after.email, after.active, nowIso(), before.id, before.version).changes ||
-        concurrency.stale(db.get('SELECT * FROM users WHERE id = ?', before.id), { entity: 'user', label: 'این کاربر' });
-      if (!after.active) auth.endOthers(before.id, null);
-      audit(req, { action: 'update', entity: 'user', id: before.id, summary: `ویرایش کاربر «${after.name}»`, changes });
+      db.tx(() => {
+        db.run('UPDATE users SET name = ?, username = ?, role = ?, phone = ?, email = ?, active = ?, updated_at = ?, version = version + 1 WHERE id = ? AND version = ?',
+          after.name, after.username, after.role, after.phone, after.email, after.active, nowIso(), before.id, before.version).changes ||
+          concurrency.stale(db.get('SELECT * FROM users WHERE id = ?', before.id), { entity: 'user', label: 'این کاربر' });
+        if (!after.active) auth.endOthers(before.id, null);
+        audit(req, { action: 'update', entity: 'user', id: before.id, summary: `ویرایش کاربر «${after.name}»`, changes });
+      });
     }
     return { user: row(db.get('SELECT * FROM users WHERE id = ?', before.id)) };
   });
@@ -78,9 +83,12 @@ module.exports = async function userRoutes(app) {
     if (!u) throw notFound('کاربر پیدا نشد.');
     if (u.id === req.user.id) throw badRequest('رمز خودتان را از صفحه‌ی پروفایل عوض کنید.');
     const pw = tempPassword();
-    db.run('UPDATE users SET password_hash = ?, must_change_password = 1, updated_at = ? WHERE id = ?', await hashPassword(pw), nowIso(), u.id);
-    const ended = auth.endOthers(u.id, null);
-    audit(req, { action: 'password', entity: 'user', id: u.id, summary: `رمز موقت جدید برای «${u.name}»` + (ended ? ' و خروج از همه‌ی دستگاه‌ها' : '') });
+    const hash = await hashPassword(pw);
+    db.tx(() => {
+      db.run('UPDATE users SET password_hash = ?, must_change_password = 1, updated_at = ? WHERE id = ?', hash, nowIso(), u.id);
+      const ended = auth.endOthers(u.id, null);
+      audit(req, { action: 'password', entity: 'user', id: u.id, summary: `رمز موقت جدید برای «${u.name}»` + (ended ? ' و خروج از همه‌ی دستگاه‌ها' : '') });
+    });
     return { temp_password: pw };
   });
 };

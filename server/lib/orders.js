@@ -16,7 +16,7 @@
  *                                                               the order from our stock or cancelled
  *   cancelled  the customer order was cancelled before shipping
  * Stock picks default to the company's own surplus first (decision 5), then our own stock.
- * Every stock change is a row in stock_moves; undo writes opposite rows, nothing is deleted.
+ * Every stock change goes through the ledger (lib/stock.js); undo writes opposite rows.
  */
 const { nowIso, badRequest, notFound, conflict, HttpError } = require('./util');
 
@@ -25,7 +25,8 @@ const FIRST_SEEN_GRACE_MS = 15 * 60e3;
 
 const OUTCOME_LABEL = { ok: 'درست رسید', excess: 'اضافه رسید', short: 'کم رسید / نرسید', wrong: 'اشتباه رسید', cancelled: 'لغو شد' };
 
-function createOrders({ db, sync, events, audit }) {
+function createOrders({ db, sync, events, audit, stock }) {
+  const { move, saleValue } = stock;
   /* ------------------------------------------------------------ lookups */
   function productRow(id) {
     const p = db.get(`SELECT p.*, c.name AS company_name, c.currency, c.active AS company_active, c.warehouse_id AS company_warehouse_id
@@ -49,11 +50,15 @@ function createOrders({ db, sync, events, audit }) {
     let refreshError = null;
     const age = Date.now() - new Date(orderedAt).getTime();
     if (refresh && age < 30 * 60e3 && age > -5 * 60e3) {
+      let timer;
       try {
-        await Promise.race([sync.refreshProduct(productId), new Promise((_, rej) => setTimeout(() => rej(new Error('سایت دیر جواب داد.')), 8000))]);
+        const late = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('سایت دیر جواب داد.')), 8000); });
+        await Promise.race([sync.refreshProduct(productId), late]);
         refreshed = true;
       } catch (err) {
         refreshError = err.message;
+      } finally {
+        clearTimeout(timer);
       }
       p = productRow(productId);
     }
@@ -181,66 +186,6 @@ function createOrders({ db, sync, events, audit }) {
     return { order: o, lines, activity };
   }
 
-  /* ------------------------------------------------------------ stock */
-  function balance(productId, warehouseId, ownerId) {
-    return db.get(`SELECT COALESCE(SUM(units), 0) AS n FROM stock_moves WHERE product_id = ? AND warehouse_id = ? AND owner_company_id IS ?`,
-      productId, warehouseId, ownerId ?? null).n;
-  }
-
-  /** Writes one ledger row after checking the balance cannot go below zero. */
-  function move({ productId, warehouseId, ownerId = null, units, kind, lineId = null, arrivalId = null, returnId = null, value = null, note = null, userId = null, reverses = null }) {
-    if (!units) return null;
-    if (!db.get('SELECT 1 FROM warehouses WHERE id = ?', warehouseId)) throw badRequest('انبار پیدا نشد.');
-    if (units < 0) {
-      const have = balance(productId, warehouseId, ownerId);
-      if (have + units < 0) {
-        const p = db.get('SELECT name FROM products WHERE id = ?', productId);
-        throw conflict(`موجودی «${p ? p.name : productId}» در این انبار کافی نیست (موجود: ${have} عدد، لازم: ${-units} عدد).`);
-      }
-    }
-    const id = Number(db.run(`INSERT INTO stock_moves (product_id, warehouse_id, owner_company_id, units, kind, order_line_id, arrival_id, return_id, value, reverses, note, user_id, created_at)
-                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    productId, warehouseId, ownerId ?? null, units, kind, lineId, arrivalId, returnId, value, reverses, note, userId, nowIso()).lastInsertRowid);
-    if (reverses) db.run('UPDATE stock_moves SET reversed_by = ? WHERE id = ?', id, reverses);
-    return id;
-  }
-
-  /**
-   * Stock that can fill an order line of a product: the same product first, then the other
-   * variations of the same site product (same company). Company surplus before our own stock.
-   */
-  function available(productId, { companyOnly = false } = {}) {
-    const p = productRow(productId);
-    const family = p.parent_woo_id
-      ? db.all('SELECT id FROM products WHERE company_id = ? AND parent_woo_id = ?', p.company_id, p.parent_woo_id).map((r) => r.id)
-      : [p.id];
-    const rows = db.all(`SELECT m.product_id, m.warehouse_id, m.owner_company_id, SUM(m.units) AS units, pr.name AS product_name, pr.units_per_pack,
-                           w.name AS warehouse_name, oc.name AS owner_name
-                         FROM stock_moves m JOIN products pr ON pr.id = m.product_id JOIN warehouses w ON w.id = m.warehouse_id
-                         LEFT JOIN companies oc ON oc.id = m.owner_company_id
-                         WHERE m.product_id IN (${family.map(() => '?').join(',')})
-                         GROUP BY m.product_id, m.warehouse_id, m.owner_company_id HAVING SUM(m.units) > 0`, ...family);
-    const filtered = companyOnly ? rows.filter((r) => r.owner_company_id === p.company_id) : rows.filter((r) => r.owner_company_id === null || r.owner_company_id === p.company_id);
-    // Order: this company's surplus first (decision 5), same product before its siblings, then bigger piles
-    return filtered.sort((a, b) =>
-      (a.owner_company_id === null) - (b.owner_company_id === null) ||
-      (a.product_id !== p.id) - (b.product_id !== p.id) ||
-      b.units - a.units);
-  }
-
-  /** Default allocation of `units` over the available rows (in the order above). */
-  function suggestPicks(productId, units) {
-    const picks = [];
-    let left = units;
-    for (const r of available(productId)) {
-      if (left <= 0) break;
-      const take = Math.min(left, r.units);
-      picks.push({ product_id: r.product_id, warehouse_id: r.warehouse_id, owner_company_id: r.owner_company_id, units: take });
-      left -= take;
-    }
-    return { picks, missing: left };
-  }
-
   /* ------------------------------------------------------------ receiving */
   function lineRow(id) {
     const l = db.get(`SELECT l.*, o.ordered_at, o.order_number, o.cancelled_at AS order_cancelled_at, pl.name AS platform_name, p.name AS product_name,
@@ -250,11 +195,10 @@ function createOrders({ db, sync, events, audit }) {
     if (!l) throw notFound('ردیف سفارش پیدا نشد.');
     return l;
   }
-  const surplusWarehouse = (l, productId) => {
-    const p = productId && productId !== l.product_id ? db.get('SELECT warehouse_id FROM products WHERE id = ?', productId) : { warehouse_id: l.product_warehouse_id };
-    const id = (p && p.warehouse_id) || l.company_warehouse_id || (db.get('SELECT id FROM warehouses WHERE active = 1 ORDER BY id LIMIT 1') || {}).id;
-    return id;
-  };
+  const surplusWarehouse = (l, productId) => stock.defaultWarehouse({
+    productWarehouseId: productId && productId !== l.product_id ? (db.get('SELECT warehouse_id FROM products WHERE id = ?', productId) || {}).warehouse_id : l.product_warehouse_id,
+    companyWarehouseId: l.company_warehouse_id
+  });
   function companyProduct(l, productId) {
     if (!productId) return null;
     const p = db.get('SELECT id, company_id, name FROM products WHERE id = ?', productId);
@@ -269,17 +213,17 @@ function createOrders({ db, sync, events, audit }) {
    */
   function shipFromStock(l, units, picks, userId) {
     if (units <= 0) return 0;
-    const list = picks && picks.length ? picks : suggestPicks(l.product_id, units).picks;
+    const list = picks && picks.length ? picks : stock.suggestPicks(l.product_id, units).picks;
     const total = list.reduce((s, p) => s + Number(p.units || 0), 0);
     if (total !== units) throw badRequest(`از انبار باید دقیقاً ${units} عدد برداشته شود (الان ${total} عدد انتخاب شده). اگر موجودی کافی نیست، باقی را لغو کنید.`);
-    const allowed = new Set(available(l.product_id).map((r) => `${r.product_id}:${r.warehouse_id}:${r.owner_company_id ?? ''}`));
+    const allowed = new Set(stock.available(l.product_id).map((r) => `${r.product_id}:${r.warehouse_id}:${r.owner_company_id ?? ''}`));
     for (const p of list) {
       const n = Number(p.units);
       if (!Number.isInteger(n) || n <= 0) continue;
       const key = `${p.product_id}:${p.warehouse_id}:${p.owner_company_id ?? ''}`;
       if (!allowed.has(key)) throw badRequest('یکی از ردیف‌های انتخاب‌شده‌ی انبار برای این کالا مجاز نیست.');
       const owner = p.owner_company_id ?? null;
-      const value = owner ? Math.round((l.settle_unit_price * n) / l.units_per_sale) : null;
+      const value = owner ? saleValue(l.settle_unit_price, n, l.units_per_sale) : null;
       move({ productId: p.product_id, warehouseId: p.warehouse_id, ownerId: owner, units: -n, kind: 'ship_out', lineId: l.id, value, userId });
     }
     return units;
@@ -366,6 +310,29 @@ function createOrders({ db, sync, events, audit }) {
     return lineRow(lineId);
   }
 
+  /** Something arrived that no order asked for: into stock (still the company's) or straight back. */
+  function receiveUnordered(req, { company_id: companyId, product_id: productId, description, units, disposition, warehouse_id: warehouseId, note }) {
+    const userId = req.user ? req.user.id : null;
+    return db.tx(() => {
+      const comp = db.get('SELECT * FROM companies WHERE id = ?', companyId);
+      if (!comp) throw badRequest('شرکت پیدا نشد.', { company_id: 'پیدا نشد.' });
+      const p = productId ? db.get('SELECT * FROM products WHERE id = ? AND company_id = ?', productId, comp.id) : null;
+      if (productId && !p) throw badRequest('کالا مال این شرکت نیست.', { product_id: 'مال این شرکت نیست.' });
+      if (!p && !description) throw badRequest('کالا را انتخاب کنید یا بنویسید چه رسید.', { description: 'لازم است' });
+      if (disposition === 'stock' && !p) throw badRequest('برای بردن به انبار، کالا را از کالاهای شرکت انتخاب کنید.', { product_id: 'لازم است' });
+      const wh = disposition === 'stock' ? warehouseId || stock.defaultWarehouse({ productWarehouseId: p.warehouse_id, companyWarehouseId: comp.warehouse_id }) : null;
+      const aid = Number(db.run(`INSERT INTO arrivals (company_id, product_id, description, units, disposition, warehouse_id, wrong, user_id, created_at)
+                                 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`, comp.id, p ? p.id : null, description ?? null, units, disposition, wh, userId, nowIso()).lastInsertRowid);
+      if (disposition === 'stock') move({ productId: p.id, warehouseId: wh, ownerId: comp.id, units, kind: 'surplus_in', arrivalId: aid, userId, note: note || 'رسیده بدون سفارش' });
+      audit(req, {
+        action: 'receive', entity: 'company', id: comp.id,
+        summary: `رسیدن ${units} عدد «${p ? p.name : description}» از ${comp.name} بدون سفارش — ${disposition === 'stock' ? 'به انبار رفت' : 'برگشت داده شد'}${note ? ` — ${note}` : ''}`
+      });
+      events.emit('stock', { companyId: comp.id });
+      return aid;
+    });
+  }
+
   /** Puts a received line back to "waiting": opposite stock rows, arrivals voided. */
   function undoReceive(req, lineId) {
     const userId = req.user ? req.user.id : null;
@@ -375,14 +342,8 @@ function createOrders({ db, sync, events, audit }) {
       if (db.get('SELECT 1 FROM returns WHERE order_line_id = ? AND voided_at IS NULL', l.id)) {
         throw conflict('برای این ردیف مرجوعی ثبت شده؛ اول مرجوعی را باطل کنید.');
       }
-      const moves = db.all('SELECT * FROM stock_moves WHERE order_line_id = ? AND return_id IS NULL AND reversed_by IS NULL AND reverses IS NULL ORDER BY id DESC', l.id);
-      for (const m of moves) {
-        try {
-          move({ productId: m.product_id, warehouseId: m.warehouse_id, ownerId: m.owner_company_id, units: -m.units, kind: 'reversal', lineId: l.id, reverses: m.id, userId, note: 'برگرداندن دریافت' });
-        } catch (err) {
-          if (err.statusCode === 409) throw conflict('کالاهایی که با این دریافت به انبار رفته بودند بعداً استفاده شده‌اند؛ اول آن ارسال‌ها را برگردانید.');
-          throw err;
-        }
+      for (const m of stock.liveMoves('order_line_id = ? AND return_id IS NULL', l.id)) {
+        stock.reverse(m, { userId, note: 'برگرداندن دریافت', usedMessage: 'کالاهایی که با این دریافت به انبار رفته بودند بعداً استفاده شده‌اند؛ اول آن ارسال‌ها را برگردانید.' });
       }
       db.run('UPDATE arrivals SET voided_at = ? WHERE order_line_id = ? AND voided_at IS NULL', nowIso(), l.id);
       db.run(`UPDATE order_lines SET status = 'pending', outcome = NULL, units_from_company = 0, units_from_stock = 0, units_cancelled = 0,
@@ -450,9 +411,7 @@ function createOrders({ db, sync, events, audit }) {
       db.run(`UPDATE order_lines SET site_price = ?, site_price_source = CASE WHEN ? THEN 'manual' ELSE site_price_source END, settle_unit_price = ?,
                 settle_manual = 1, settle_reason = ?, updated_at = ? WHERE id = ?`, site, site !== l.site_price ? 1 : 0, settle, reason, nowIso(), l.id);
       // Units already sent from the company's stock carry their value: keep it in step
-      for (const m of db.all("SELECT * FROM stock_moves WHERE order_line_id = ? AND kind = 'ship_out' AND owner_company_id IS NOT NULL AND reversed_by IS NULL", l.id)) {
-        db.run('UPDATE stock_moves SET value = ? WHERE id = ?', Math.round((settle * -m.units) / l.units_per_sale), m.id);
-      }
+      stock.revalueSales(l.id, settle, l.units_per_sale);
       audit(req, { action: 'price', entity: 'order_line', id: l.id, summary: `تغییر دستی قیمت «${l.product_name}» در سفارش ${l.order_number || l.order_id} — دلیل: ${reason}`, changes });
     });
     events.emit('orders', { ids: [l.order_id], lines: [l.id] });
@@ -481,7 +440,7 @@ function createOrders({ db, sync, events, audit }) {
 
   return {
     quote, prepareLine, createOrder, insertLine, addLines, cancelOrder, setLinePrice, orderDetail,
-    available, suggestPicks, move, balance, receive, undoReceive, receivingList, lineRow, OUTCOME_LABEL
+    receive, receiveUnordered, undoReceive, receivingList, lineRow, OUTCOME_LABEL
   };
 }
 

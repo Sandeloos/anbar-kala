@@ -131,9 +131,13 @@ function createTasks({ db, events, audit, settings }) {
     const t = one(id);
     if (t.status !== 'open') throw conflict('این کار قبلاً بسته شده است.');
     const now = nowIso();
-    db.run("UPDATE tasks SET status = 'dismissed', note = ?, closed_at = ?, closed_by = ?, updated_at = ? WHERE id = ?", note, now, req.user.id, now, t.id);
-    audit(req, { action: 'dismiss', entity: 'listing', id: t.listing_id, summary: `کارتابل: «${t.product_name}» در ${t.platform_name} لازم نبود — ${note}` });
-    events.emit('tasks', { ids: [t.id] });
+    db.tx(() => {
+      const changed = db.run("UPDATE tasks SET status = 'dismissed', note = ?, closed_at = ?, closed_by = ?, updated_at = ? WHERE id = ? AND status = 'open'",
+        note, now, req.user.id, now, t.id).changes;
+      if (!changed) throw conflict('این کار قبلاً بسته شده است.');
+      audit(req, { action: 'dismiss', entity: 'listing', id: t.listing_id, summary: `کارتابل: «${t.product_name}» در ${t.platform_name} لازم نبود — ${note}` });
+      events.emit('tasks', { ids: [t.id] });
+    });
     return one(id);
   }
 

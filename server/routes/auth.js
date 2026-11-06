@@ -28,8 +28,10 @@ module.exports = async function authRoutes(app) {
     if (!user || !ok) throw new HttpError(401, 'نام کاربری یا رمز عبور درست نیست.', { fields: { password: 'نام کاربری یا رمز عبور درست نیست.' } });
     if (!user.active) throw new HttpError(403, 'حساب شما غیرفعال شده است؛ با مدیر تماس بگیرید.');
     limit.reset(`login-user:${name}`);
-    auth.start(reply, req, user.id);
-    audit({ user, ip: req.ip }, { action: 'login', entity: 'user', id: user.id, summary: 'ورود به نرم‌افزار' });
+    db.tx(() => {
+      auth.start(reply, req, user.id);
+      audit({ user, ip: req.ip }, { action: 'login', entity: 'user', id: user.id, summary: 'ورود به نرم‌افزار' });
+    });
     return { user: publicUser(user) };
   });
 

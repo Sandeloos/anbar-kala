@@ -40,6 +40,11 @@ decision taken with them: `docs/decisions.md` (Persian) — read it before chang
   `UPDATE … SET version = version + 1 WHERE id = ? AND version = ?` and `concurrency.stale()` on 0 changes;
   the browser passes `put(path, body, { version })`. Writes are idempotent (`Idempotency-Key`, `api.js`).
 - Create `Intl.DateTimeFormat` once at module level, never per call (it costs ~60 µs).
+- One command = one `db.tx(() => { … })`: the change, its stock moves, `audit()` and `events.emit()` inside it
+  (audit outside a transaction throws in dev/tests; events are delivered after COMMIT). Never `await` inside
+  `db.tx`: do network work first, then re-check inside the transaction.
+- Stock only through `lib/stock.js` (`move`, `reverse`, `defaultWarehouse`, `saleValue`, …); each money table has
+  one writer module (`tests/unit/architecture.test.js`). Sync writes pass `fetchedAt` (time the request was sent).
 - Technical decisions: `docs/adr/`. Operations: `/health`, `/ready`, `/metrics` (METRICS_TOKEN), request ids,
   graceful `app.shutdown()`; config is validated in `config.js` (add new variables to its zod schema).
 
@@ -48,8 +53,8 @@ decision taken with them: `docs/decisions.md` (Persian) — read it before chang
   Persian messages); `lib/sync.js` (WooCommerce sync, price history, price-at), `lib/woo.js` (REST client
   and connection detection), `lib/auth.js`, `lib/audit.js`, `lib/secrets.js` (AES-GCM for API keys),
   `jobs.js` (scheduler: sync with back-off, nightly backup + integrity, key pruning), `migrations/*.sql`.
-  Engineering: `lib/integrity.js`, `lib/idempotency.js`, `lib/concurrency.js`, `lib/metrics.js`,
-  `tools/bench.js`; tests in `tests/unit/engineering.test.js`.
+  Engineering: `lib/integrity.js`, `lib/idempotency.js`, `lib/concurrency.js`, `lib/metrics.js`, `lib/stock.js`,
+  `tools/bench.js`; tests in `tests/unit/engineering.test.js`, `design.test.js`, `architecture.test.js`.
 - `public/index.html` (shell, icon sprite, dialogs) + `assets/css/app.css` + `assets/js/`
   (`app.js` router/shell/palette, `api.js`, `ui.js`, `live.js`, `views/<section>.js` each exporting
   `render(view, ctx, params)`; handlers are assigned as `view.onclick = …` so the next view replaces them).

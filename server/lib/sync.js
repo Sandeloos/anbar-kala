@@ -145,10 +145,20 @@ function createSync({ db, config, secrets, events, log, fetchImpl, metrics }) {
   /**
    * Writes normalised items: new products, changed prices/stock (with history)
    * and refreshed names/links. Returns counts and the ids that changed.
+   *
+   * fetchedAt: when the request that produced `items` was sent. A product written after that
+   * (by the plugin's push, a refresh, another run) holds newer data than this snapshot, so the
+   * snapshot does not overwrite it — unless the site itself marks the item as modified later.
+   * Without this, a full sync that read page 3 before a price change and wrote it after the
+   * plugin's push would put the old price back and record a change that never happened.
+   *
+   * The inbox (change listeners) is updated in the same transaction: a product change and the
+   * task it causes commit together.
    */
   const changeListeners = [];
-  function apply(comp, items, { source, now = nowIso(), userId = null } = {}) {
-    const stats = { seen: 0, created: 0, priceChanges: 0, stockChanges: 0, ids: [] };
+  const newerOnSite = (it, existing) => !!(it.site_modified_at && existing.site_modified_at && it.site_modified_at > existing.site_modified_at);
+  function apply(comp, items, { source, now = nowIso(), userId = null, fetchedAt = null } = {}) {
+    const stats = { seen: 0, created: 0, priceChanges: 0, stockChanges: 0, stale: 0, ids: [] };
     const changes = [];
     if (!items.length) return stats;
     db.tx(() => {
@@ -171,6 +181,10 @@ function createSync({ db, config, secrets, events, log, fetchImpl, metrics }) {
           id, it.regular_price, it.sale_price, it.stock_status, it.stock_quantity, now, now, userId);
           stats.created++;
           stats.ids.push(id);
+          continue;
+        }
+        if (fetchedAt && existing.last_checked_at && existing.last_checked_at > fetchedAt && !newerOnSite(it, existing)) {
+          stats.stale++;
           continue;
         }
         const priceChanged = existing.regular_price !== it.regular_price || existing.sale_price !== it.sale_price;
@@ -205,13 +219,11 @@ function createSync({ db, config, secrets, events, log, fetchImpl, metrics }) {
         existing.id);
         if (!priceChanged && !stockChanged && existing.removed_at) stats.ids.push(existing.id);
       }
+      for (const fn of changeListeners) fn(changes);
+      if (stats.ids.length) {
+        events.emit('products', { companyId: comp.id, ids: stats.ids, created: stats.created, priceChanges: stats.priceChanges, stockChanges: stats.stockChanges, source });
+      }
     });
-    if (stats.ids.length) {
-      events.emit('products', { companyId: comp.id, ids: stats.ids, created: stats.created, priceChanges: stats.priceChanges, stockChanges: stats.stockChanges, source });
-    }
-    for (const fn of changeListeners) {
-      try { fn(changes); } catch (err) { log.error({ err }, 'change listener failed'); }
-    }
     return stats;
   }
 
@@ -282,11 +294,12 @@ function createSync({ db, config, secrets, events, log, fetchImpl, metrics }) {
     await mapLimit(parents, 4, async (parent) => {
       let page = 1, pages;
       do {
+        const fetchedAt = nowIso();
         const res = await client.variations(parent.id, { page });
         pages = res.totalPages;
         const items = (res.data || []).map((v) => normalise(v, comp.price_unit, parent)).filter(Boolean);
         items.forEach((i) => seenIds.push(i.woo_id));
-        add(run, apply(comp, items, { source }));
+        add(run, apply(comp, items, { source, fetchedAt }));
         page++;
       } while (page <= pages);
     });
@@ -304,6 +317,7 @@ function createSync({ db, config, secrets, events, log, fetchImpl, metrics }) {
       const parents = [];
       let page = 1, pages, total = 0;
       do {
+        const fetchedAt = nowIso();
         const res = await client.products({ page });
         pages = res.totalPages;
         total = res.total || total;
@@ -313,7 +327,7 @@ function createSync({ db, config, secrets, events, log, fetchImpl, metrics }) {
           const it = normalise(raw, comp.price_unit);
           if (it) { items.push(it); seen.add(it.woo_id); }
         }
-        add(run, apply(comp, items, { source: 'sync' }));
+        add(run, apply(comp, items, { source: 'sync', fetchedAt }));
         events.emit('sync', { companyId: comp.id, state: 'progress', kind: 'full', page, pages, total, seen: run.seen });
         page++;
       } while (page <= pages);
@@ -342,6 +356,7 @@ function createSync({ db, config, secrets, events, log, fetchImpl, metrics }) {
       const parents = [];
       let page = 1, pages;
       do {
+        const fetchedAt = nowIso();
         const res = await client.products({ page, modifiedAfter });
         pages = res.totalPages;
         const items = [];
@@ -350,7 +365,7 @@ function createSync({ db, config, secrets, events, log, fetchImpl, metrics }) {
           const it = normalise(raw, comp.price_unit);
           if (it) items.push(it);
         }
-        add(run, apply(comp, items, { source: 'sync' }));
+        add(run, apply(comp, items, { source: 'sync', fetchedAt }));
         page++;
       } while (page <= pages);
       await fetchVariations(client, comp, parents, run, 'sync');
@@ -377,7 +392,7 @@ function createSync({ db, config, secrets, events, log, fetchImpl, metrics }) {
       } else {
         item = normalise(await client.product(p.woo_id), comp.price_unit);
       }
-      if (item) apply(comp, [item], { source: 'refresh', now, userId });
+      if (item) apply(comp, [item], { source: 'refresh', userId, fetchedAt: now });
     } catch (err) {
       if (err.code === 'not_found') markRemoved(comp, [p.woo_id], now);
       else throw err;
@@ -404,6 +419,7 @@ function createSync({ db, config, secrets, events, log, fetchImpl, metrics }) {
     const segments = u.pathname.split('/').filter(Boolean);
     const slug = segments.length ? decodeURIComponent(segments[segments.length - 1]) : '';
     const client = clientFor(comp);
+    const fetchedAt = nowIso();
     let raw = null;
     const pid = Number(u.searchParams.get('p') || u.searchParams.get('product_id') || 0);
     if (pid) raw = await client.product(pid).catch(() => null);
@@ -412,9 +428,8 @@ function createSync({ db, config, secrets, events, log, fetchImpl, metrics }) {
       raw = (res.data || [])[0] || null;
     }
     if (!raw) throw notFound('کالایی با این لینک در سایت پیدا نشد.');
-    const now = nowIso();
     if (raw.type !== 'variable') {
-      apply(comp, [normalise(raw, comp.price_unit)], { source: 'refresh', now, userId });
+      apply(comp, [normalise(raw, comp.price_unit)], { source: 'refresh', userId, fetchedAt });
       const p = db.get('SELECT id FROM products WHERE company_id = ? AND woo_id = ?', comp.id, raw.id);
       return { company: { id: comp.id, name: comp.name }, ids: [p.id], matched: p.id };
     }
@@ -446,12 +461,16 @@ function createSync({ db, config, secrets, events, log, fetchImpl, metrics }) {
       const it = normalise(raw, comp.price_unit, parent);
       if (it) items.push(it);
     }
-    const stats = apply(comp, items, { source: 'webhook', now });
-    const deleted = (Array.isArray(payload.deleted) ? payload.deleted : []).map(Number).filter(Boolean);
-    stats.removed = deleted.length ? markRemoved(comp, deleted, now) : 0;
-    db.run('UPDATE companies SET last_webhook_at = ? WHERE id = ?', now, comp.id);
-    events.emit('company', { id: comp.id });
-    return stats;
+    // A push is the freshest word from the site (sent as the change happens), so it is not
+    // checked against fetchedAt; its parts commit together.
+    return db.tx(() => {
+      const stats = apply(comp, items, { source: 'webhook', now });
+      const deleted = (Array.isArray(payload.deleted) ? payload.deleted : []).map(Number).filter(Boolean);
+      stats.removed = deleted.length ? markRemoved(comp, deleted, now) : 0;
+      db.run('UPDATE companies SET last_webhook_at = ? WHERE id = ?', now, comp.id);
+      events.emit('company', { id: comp.id });
+      return stats;
+    });
   }
 
   /**

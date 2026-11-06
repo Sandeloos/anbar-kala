@@ -5,7 +5,7 @@
  * without an order.
  */
 const { z, optText, intIn } = require('./validate');
-const { badRequest, nowIso } = require('../lib/util');
+const { nowIso } = require('../lib/util');
 const { dayStart, tehranDay } = require('../lib/jalali');
 
 const pick = z.object({
@@ -14,7 +14,7 @@ const pick = z.object({
 });
 
 module.exports = async function receivingRoutes(app) {
-  const { db, orders, audit, events } = app.ctx;
+  const { db, orders, stock } = app.ctx;
 
   /** Summary per company + the lines of one company. until = 'YYYY-MM-DD' (Tehran day; orders before it). */
   app.get('/receiving', async (req) => {
@@ -48,7 +48,7 @@ module.exports = async function receivingRoutes(app) {
     const siblings = db.all(`SELECT id, name, attributes, units_per_pack FROM products WHERE company_id = ? AND removed_at IS NULL AND id <> ?
                              AND parent_woo_id IS ? AND parent_woo_id IS NOT NULL ORDER BY woo_id`,
     l.company_id, l.product_id, db.get('SELECT parent_woo_id FROM products WHERE id = ?', l.product_id).parent_woo_id);
-    return { line: l, available: orders.available(l.product_id), suggestion: orders.suggestPicks(l.product_id, units), siblings };
+    return { line: l, available: stock.available(l.product_id), suggestion: stock.suggestPicks(l.product_id, units), siblings };
   });
 
   app.post('/order-lines/:id/receive', async (req) => {
@@ -93,24 +93,7 @@ module.exports = async function receivingRoutes(app) {
       warehouse_id: z.preprocess((v) => (v ? Number(v) : undefined), z.number().int().optional()),
       note: optText(500).optional()
     }).parse(req.body || {});
-    const comp = db.get('SELECT * FROM companies WHERE id = ?', b.company_id);
-    if (!comp) throw badRequest('شرکت پیدا نشد.');
-    const p = b.product_id ? db.get('SELECT * FROM products WHERE id = ? AND company_id = ?', b.product_id, comp.id) : null;
-    if (b.product_id && !p) throw badRequest('کالا مال این شرکت نیست.');
-    if (!p && !b.description) throw badRequest('کالا را انتخاب کنید یا بنویسید چه رسید.', { description: 'لازم است' });
-    if (b.disposition === 'stock' && !p) throw badRequest('برای بردن به انبار، کالا را از کالاهای شرکت انتخاب کنید.');
-    const wh = b.warehouse_id || (p && p.warehouse_id) || comp.warehouse_id || 1;
-    db.tx(() => {
-      const aid = Number(db.run(`INSERT INTO arrivals (company_id, product_id, description, units, disposition, warehouse_id, wrong, user_id, created_at)
-                                 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`, comp.id, p ? p.id : null, b.description ?? null, b.units, b.disposition,
-      b.disposition === 'stock' ? wh : null, req.user.id, nowIso()).lastInsertRowid);
-      if (b.disposition === 'stock') orders.move({ productId: p.id, warehouseId: wh, ownerId: comp.id, units: b.units, kind: 'surplus_in', arrivalId: aid, userId: req.user.id, note: b.note || 'رسیده بدون سفارش' });
-      audit(req, {
-        action: 'receive', entity: 'company', id: comp.id,
-        summary: `رسیدن ${b.units} عدد «${p ? p.name : b.description}» از ${comp.name} بدون سفارش — ${b.disposition === 'stock' ? 'به انبار رفت' : 'برگشت داده شد'}${b.note ? ` — ${b.note}` : ''}`
-      });
-    });
-    events.emit('stock', { companyId: comp.id });
+    orders.receiveUnordered(req, b);
     return { ok: true };
   });
 };

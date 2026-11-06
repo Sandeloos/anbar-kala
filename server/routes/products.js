@@ -108,6 +108,7 @@ module.exports = async function productRoutes(app) {
     const label = (r) => ({ ...r, warehouse: warehouseLabel(r.warehouse_id), tracked: r.tracked ? 'بله' : 'خیر' });
     const changes = audit.diff(label(before), label(after), SETTING_FIELDS);
     const now = nowIso();
+    db.tx(() => {
     db.run(`UPDATE products SET units_per_pack = ?, warehouse_id = ?, tracked = ?, note = ?, units_guessed = 0, configured_at = COALESCE(configured_at, ?), updated_at = ?,
               version = version + 1 WHERE id = ? AND version = ?`, after.units_per_pack, after.warehouse_id, after.tracked ? 1 : 0, after.note, now, now, before.id, before.version).changes ||
       concurrency.stale(db.get('SELECT * FROM products WHERE id = ?', before.id), { entity: 'product', label: 'این کالا' });
@@ -117,6 +118,7 @@ module.exports = async function productRoutes(app) {
         summary: changes.length ? `تنظیم کالا «${before.name}»` : `تأیید تنظیمات کالا «${before.name}» (${after.units_per_pack} عدد در هر بسته)`, changes
       });
     }
+    });
   }
   const warehouseId = z.preprocess((v) => (v === '' || v === undefined || v === 'company' ? null : v), intIn('انبار', 1, 1e9).nullable());
   const checkWarehouse = (id) => {
@@ -194,10 +196,12 @@ module.exports = async function productRoutes(app) {
     const sale = body.sale_price ? toRial(body.sale_price, p.currency) : null;
     const at = body.effective_at ? new Date(body.effective_at).toISOString() : undefined;
     const before = p.regular_price;
-    sync.manualPrice(p.id, { regular, sale, effectiveAt: at, note: body.note, userId: req.user.id });
-    audit(req, {
-      action: 'price', entity: 'product', id: p.id, summary: `ثبت دستی قیمت «${p.name}» — دلیل: ${body.note}`,
-      changes: [{ field: 'regular_price', label: 'قیمت (ریال)', from: before, to: regular }]
+    db.tx(() => {
+      sync.manualPrice(p.id, { regular, sale, effectiveAt: at, note: body.note, userId: req.user.id });
+      audit(req, {
+        action: 'price', entity: 'product', id: p.id, summary: `ثبت دستی قیمت «${p.name}» — دلیل: ${body.note}`,
+        changes: [{ field: 'regular_price', label: 'قیمت (ریال)', from: before, to: regular }]
+      });
     });
     return detail(p.id);
   });

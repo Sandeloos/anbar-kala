@@ -16,7 +16,7 @@ class HttpError extends Error {
 const badRequest = (msg, fields) => new HttpError(400, msg, fields ? { fields } : undefined);
 const notFound = (msg = 'پیدا نشد.') => new HttpError(404, msg);
 const forbidden = (msg = 'دسترسی این کار را ندارید.') => new HttpError(403, msg);
-const conflict = (msg, fields) => new HttpError(409, msg, fields ? { fields } : undefined);
+const conflict = (msg, fields, code) => new HttpError(409, msg, { ...(fields ? { fields } : {}), ...(code ? { code } : {}) });
 
 /* ------------------------------------------------------------ time */
 const TZ = 'Asia/Tehran';

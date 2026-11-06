@@ -19,8 +19,10 @@ module.exports = async function listingRoutes(app) {
     if (db.get('SELECT 1 FROM platforms WHERE name = ?', body.name)) throw conflict('پلتفرمی با این نام هست.', { name: 'تکراری است.' });
     const code = 'p' + Date.now().toString(36);
     const sort = db.get('SELECT COALESCE(MAX(sort), 0) + 1 AS n FROM platforms').n;
-    const id = Number(db.run('INSERT INTO platforms (code, name, sort, created_at) VALUES (?, ?, ?, ?)', code, body.name, sort, nowIso()).lastInsertRowid);
-    audit(req, { action: 'create', entity: 'platform', id, summary: `افزودن پلتفرم «${body.name}»` });
+    db.tx(() => {
+      const id = Number(db.run('INSERT INTO platforms (code, name, sort, created_at) VALUES (?, ?, ?, ?)', code, body.name, sort, nowIso()).lastInsertRowid);
+      audit(req, { action: 'create', entity: 'platform', id, summary: `افزودن پلتفرم «${body.name}»` });
+    });
     return { items: db.all('SELECT * FROM platforms ORDER BY active DESC, sort, id') };
   });
 
@@ -78,12 +80,15 @@ module.exports = async function listingRoutes(app) {
     checkCode(b.platform_id, b.code);
     const now = nowIso();
     const price = b.platform_price === null || b.platform_price === undefined ? null : toRial(b.platform_price, 'toman');
-    const id = Number(db.run(`INSERT INTO listings (platform_id, product_id, code, title, units, platform_price, note, search_text, created_at, updated_at)
-                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    b.platform_id, b.product_id, b.code ?? null, b.title ?? null, b.units, price, b.note ?? null, search(b, p), now, now).lastInsertRowid);
-    const l = one(id);
-    audit(req, { action: 'create', entity: 'listing', id, summary: `افزودن آگهی ${l.platform_name}${l.code ? ` (${l.code})` : ''} برای «${p.name}» — هر فروش ${b.units} عدد از ${p.units_per_pack}` });
-    events.emit('listings', { ids: [id] });
+    const l = db.tx(() => {
+      const id = Number(db.run(`INSERT INTO listings (platform_id, product_id, code, title, units, platform_price, note, search_text, created_at, updated_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      b.platform_id, b.product_id, b.code ?? null, b.title ?? null, b.units, price, b.note ?? null, search(b, p), now, now).lastInsertRowid);
+      const row = one(id);
+      audit(req, { action: 'create', entity: 'listing', id, summary: `افزودن آگهی ${row.platform_name}${row.code ? ` (${row.code})` : ''} برای «${p.name}» — هر فروش ${b.units} عدد از ${p.units_per_pack}` });
+      events.emit('listings', { ids: [id] });
+      return row;
+    });
     return { listing: l };
   });
 
@@ -100,13 +105,13 @@ module.exports = async function listingRoutes(app) {
     const prname = (pid) => (db.get('SELECT name FROM products WHERE id = ?', pid) || {}).name;
     const label = (r) => ({ ...r, platform: pname(r.platform_id), product: prname(r.product_id), active: r.active ? 'بله' : 'خیر' });
     const changes = audit.diff(label(before), label(after), FIELDS);
-    if (changes.length) {
+    if (changes.length) db.tx(() => {
       db.run(`UPDATE listings SET platform_id = ?, product_id = ?, code = ?, title = ?, units = ?, platform_price = ?, note = ?, active = ?, search_text = ?, updated_at = ?,
               version = version + 1 WHERE id = ? AND version = ?`, after.platform_id, after.product_id, after.code, after.title, after.units, after.platform_price, after.note, after.active,
       search(after, p), nowIso(), before.id, before.version).changes || concurrency.stale(one(before.id), { entity: 'listing', label: 'این آگهی' });
       audit(req, { action: 'update', entity: 'listing', id: before.id, summary: `ویرایش آگهی ${after.code || ''} «${p.name}»`, changes });
       events.emit('listings', { ids: [before.id] });
-    }
+    });
     return { listing: one(before.id) };
   });
 

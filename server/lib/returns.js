@@ -12,7 +12,7 @@ const { nowIso, badRequest, notFound, conflict } = require('./util');
 
 const DISPOSITION_LABEL = { kept: 'نگه داشتیم (قابل فروش)', to_company: 'برگشت به شرکت', damaged: 'معیوب' };
 
-function createReturns({ db, orders, events, audit }) {
+function createReturns({ db, orders, stock, events, audit }) {
   function returnRow(id) {
     const r = db.get(`SELECT r.*, p.name AS product_name, c.name AS company_name, c.currency, w.name AS warehouse_name, l.order_id, l.units_per_sale,
                         l.settle_unit_price, o.order_number, o.ordered_at, pl.name AS platform_name, u.name AS user_name, du.name AS disposition_by_name
@@ -43,11 +43,11 @@ function createReturns({ db, orders, events, audit }) {
       if (l.status !== 'done' || !c.shipped) throw conflict('این ردیف ارسال نشده که مرجوع شود.');
       if (!Number.isInteger(units) || units < 1) throw badRequest('تعداد مرجوعی را درست وارد کنید.', { units: 'عدد صحیح' });
       if (units > c.returnable) throw badRequest(`از این ردیف حداکثر ${c.returnable} عدد قابل مرجوع است (${c.shipped} ارسال شده، ${c.returned} قبلاً مرجوع شده).`, { units: `حداکثر ${c.returnable}` });
-      const wh = warehouseId || l.product_warehouse_id || l.company_warehouse_id || (db.get('SELECT id FROM warehouses WHERE active = 1 ORDER BY id LIMIT 1') || {}).id;
+      const wh = warehouseId || stock.defaultWarehouse({ productWarehouseId: l.product_warehouse_id, companyWarehouseId: l.company_warehouse_id });
       const at = returnedAt || nowIso();
       const rid = Number(db.run(`INSERT INTO returns (order_line_id, company_id, product_id, units, warehouse_id, reason, returned_at, user_id, created_at)
                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, l.id, l.company_id, l.product_id, units, wh, reason || null, at, userId, nowIso()).lastInsertRowid);
-      orders.move({ productId: l.product_id, warehouseId: wh, ownerId: null, units, kind: 'return_in', lineId: l.id, returnId: rid, userId, note: reason || 'مرجوعی مشتری' });
+      stock.move({ productId: l.product_id, warehouseId: wh, ownerId: null, units, kind: 'return_in', lineId: l.id, returnId: rid, userId, note: reason || 'مرجوعی مشتری' });
       audit(req, {
         action: 'create', entity: 'return', id: rid,
         summary: `مرجوعی ${units} عدد «${l.product_name}» (${l.platform_name}${l.order_number ? ` ${l.order_number}` : ''}) به انبار رسید${reason ? ` — ${reason}` : ''}`
@@ -73,10 +73,10 @@ function createReturns({ db, orders, events, audit }) {
             ? `فقط ${c.creditable} عدد از این ردیف را شرکت فرستاده یا از اضافه‌های خودش برداشته شده؛ بقیه کالای خودمان بوده و برگشت به شرکت ندارد.`
             : 'این ردیف از کالای خودمان ارسال شده بود؛ برگشت به شرکت ندارد. «نگه داشتیم» یا «معیوب» را بزنید.');
         }
-        value = Math.round((r.settle_unit_price * r.units) / r.units_per_sale);
-        orders.move({ productId: r.product_id, warehouseId: r.warehouse_id, ownerId: null, units: -r.units, kind: 'return_to_company', lineId: r.order_line_id, returnId: r.id, value, userId, note: note || 'مرجوعی برگشت به شرکت' });
+        value = stock.saleValue(r.settle_unit_price, r.units, r.units_per_sale);
+        stock.move({ productId: r.product_id, warehouseId: r.warehouse_id, ownerId: null, units: -r.units, kind: 'return_to_company', lineId: r.order_line_id, returnId: r.id, value, userId, note: note || 'مرجوعی برگشت به شرکت' });
       } else if (disposition === 'damaged') {
-        orders.move({ productId: r.product_id, warehouseId: r.warehouse_id, ownerId: null, units: -r.units, kind: 'write_off', lineId: r.order_line_id, returnId: r.id, userId, note: note || 'مرجوعی معیوب' });
+        stock.move({ productId: r.product_id, warehouseId: r.warehouse_id, ownerId: null, units: -r.units, kind: 'write_off', lineId: r.order_line_id, returnId: r.id, userId, note: note || 'مرجوعی معیوب' });
       } else if (disposition !== 'kept') {
         throw badRequest('تصمیم را انتخاب کنید.');
       }
@@ -101,9 +101,7 @@ function createReturns({ db, orders, events, audit }) {
       const billed = db.get(`SELECT s.month FROM statement_items si JOIN statements s ON s.id = si.statement_id
                              WHERE si.key = ? AND s.status <> 'void'`, `R${r.id}`);
       if (billed) throw conflict(`این برگشت در صورت‌حساب صادرشده‌ی ماه ${billed.month} آمده است؛ نمی‌شود برگرداندش.`);
-      for (const m of db.all("SELECT * FROM stock_moves WHERE return_id = ? AND kind <> 'return_in' AND reversed_by IS NULL AND reverses IS NULL", r.id)) {
-        orders.move({ productId: m.product_id, warehouseId: m.warehouse_id, ownerId: m.owner_company_id, units: -m.units, kind: 'reversal', lineId: m.order_line_id, returnId: r.id, reverses: m.id, userId, note: 'برگرداندن تصمیم مرجوعی' });
-      }
+      for (const m of stock.liveMoves("return_id = ? AND kind <> 'return_in'", r.id)) stock.reverse(m, { userId, note: 'برگرداندن تصمیم مرجوعی' });
       db.run('UPDATE returns SET disposition = NULL, disposition_at = NULL, disposition_by = NULL, disposition_note = NULL, value = NULL WHERE id = ?', r.id);
       audit(req, { action: 'undo', entity: 'return', id: r.id, summary: `برگرداندن تصمیم مرجوعی «${r.product_name}» (قبلاً: ${DISPOSITION_LABEL[r.disposition]})` });
     });
@@ -120,12 +118,8 @@ function createReturns({ db, orders, events, audit }) {
       const r = returnRow(id);
       if (r.voided_at) throw conflict('این مرجوعی قبلاً باطل شده است.');
       if (r.disposition) throw conflict('اول تصمیم این مرجوعی را برگردانید.');
-      const m = db.get("SELECT * FROM stock_moves WHERE return_id = ? AND kind = 'return_in' AND reversed_by IS NULL", r.id);
-      try {
-        if (m) orders.move({ productId: m.product_id, warehouseId: m.warehouse_id, ownerId: null, units: -m.units, kind: 'reversal', lineId: m.order_line_id, returnId: r.id, reverses: m.id, userId, note: 'ابطال مرجوعی' });
-      } catch (err) {
-        if (err.statusCode === 409) throw conflict('این کالای مرجوعی از انبار برداشته شده (مثلاً برای سفارش دیگری)؛ اول آن را برگردانید.');
-        throw err;
+      for (const m of stock.liveMoves("return_id = ? AND kind = 'return_in'", r.id)) {
+        stock.reverse(m, { userId, note: 'ابطال مرجوعی', usedMessage: 'این کالای مرجوعی از انبار برداشته شده (مثلاً برای سفارش دیگری)؛ اول آن را برگردانید.' });
       }
       db.run('UPDATE returns SET voided_at = ?, void_reason = ? WHERE id = ?', nowIso(), reason, r.id);
       audit(req, { action: 'void', entity: 'return', id: r.id, summary: `ابطال مرجوعی «${r.product_name}» — دلیل: ${reason}` });

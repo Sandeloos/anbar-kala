@@ -100,16 +100,20 @@ module.exports = async function companyRoutes(app) {
     if (body.warehouse_id && !warehouseName(body.warehouse_id)) throw badRequest('انبار پیدا نشد.', { warehouse_id: 'پیدا نشد.' });
     const found = await sync.detect({ siteUrl: body.site_url, key: body.key, secret: body.secret });
     const now = nowIso();
-    const info = db.run(`INSERT INTO companies (name, site_url, currency, price_unit, woo_key_enc, woo_secret_enc, key_hint, api_style, auth_mode,
-        webhook_secret, warehouse_id, contact_name, contact_phone, notes, site_currency, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    body.name, body.site_url, body.currency, body.price_unit, secrets.encrypt(body.key), secrets.encrypt(body.secret), body.key.slice(-4),
-    found.apiStyle, found.authMode, crypto.randomBytes(24).toString('base64url'), body.warehouse_id ?? null,
-    body.contact_name ?? null, body.contact_phone ?? null, body.notes ?? null, found.siteCurrency, now, now);
-    const id = Number(info.lastInsertRowid);
-    audit(req, { action: 'create', entity: 'company', id, summary: `افزودن شرکت «${body.name}» (${body.site_url})` });
+    // The connection test above awaited the site: check the address again inside the transaction
+    const id = db.tx(() => {
+      if (db.get('SELECT 1 FROM companies WHERE site_url = ?', body.site_url)) throw conflict('این سایت قبلاً ثبت شده است.', { site_url: 'تکراری است.' });
+      const cid = Number(db.run(`INSERT INTO companies (name, site_url, currency, price_unit, woo_key_enc, woo_secret_enc, key_hint, api_style, auth_mode,
+          webhook_secret, warehouse_id, contact_name, contact_phone, notes, site_currency, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      body.name, body.site_url, body.currency, body.price_unit, secrets.encrypt(body.key), secrets.encrypt(body.secret), body.key.slice(-4),
+      found.apiStyle, found.authMode, crypto.randomBytes(24).toString('base64url'), body.warehouse_id ?? null,
+      body.contact_name ?? null, body.contact_phone ?? null, body.notes ?? null, found.siteCurrency, now, now).lastInsertRowid);
+      audit(req, { action: 'create', entity: 'company', id: cid, summary: `افزودن شرکت «${body.name}» (${body.site_url})` });
+      events.emit('company', { id: cid });
+      return cid;
+    });
     kick(id, 'full', req.user.id);
-    events.emit('company', { id });
     return { company: view(one(id), req) };
   });
 
@@ -141,6 +145,9 @@ module.exports = async function companyRoutes(app) {
     const label = (r) => ({ ...r, currency: CURRENCY_LABEL[r.currency], price_unit: PRICE_UNITS[r.price_unit].label, warehouse: warehouseName(r.warehouse_id), active: r.active ? 'بله' : 'خیر' });
     const changes = audit.diff(label(before), label(after), FIELDS);
     if (keysChanged) changes.push({ field: 'key', label: 'کلید API', from: `…${before.key_hint || ''}`, to: `…${newKey.slice(-4)}` });
+    db.tx(() => {
+    // The connection test may have awaited the site: the address must still be free
+    if (db.get('SELECT 1 FROM companies WHERE site_url = ? AND id <> ?', body.site_url, before.id)) throw conflict('این سایت برای شرکت دیگری ثبت شده است.', { site_url: 'تکراری است.' });
     db.run(`UPDATE companies SET name = ?, site_url = ?, currency = ?, price_unit = ?, warehouse_id = ?, contact_name = ?, contact_phone = ?,
               notes = ?, active = ?, api_style = ?, auth_mode = ?, site_currency = ?, updated_at = ?,
               woo_key_enc = COALESCE(?, woo_key_enc), woo_secret_enc = COALESCE(?, woo_secret_enc), key_hint = COALESCE(?, key_hint),
@@ -151,11 +158,12 @@ module.exports = async function companyRoutes(app) {
     keysChanged ? secrets.encrypt(newKey) : null, keysChanged ? secrets.encrypt(newSecret) : null, keysChanged ? newKey.slice(-4) : null,
     before.id, before.version).changes || concurrency.stale(one(before.id), { entity: 'company', label: 'این شرکت' });
     if (changes.length) audit(req, { action: 'update', entity: 'company', id: before.id, summary: `ویرایش شرکت «${after.name}»`, changes });
+    events.emit('company', { id: before.id });
+    });
     // A different price unit changes every stored number: re-read everything with the new unit
     if (before.price_unit !== after.price_unit || keysChanged || body.site_url !== before.site_url) {
       if (!sync.isRunning(before.id)) kick(before.id, 'full', req.user.id);
     }
-    events.emit('company', { id: before.id });
     return { company: view(one(before.id), req) };
   });
 
@@ -163,8 +171,8 @@ module.exports = async function companyRoutes(app) {
     const c = one(req.params.id);
     const kind = (req.body && req.body.kind) === 'incremental' ? 'incremental' : 'full';
     if (sync.isRunning(c.id)) throw conflict('همگام‌سازی این شرکت همین حالا در حال انجام است.');
+    db.tx(() => audit(req, { action: 'sync', entity: 'company', id: c.id, summary: `${kind === 'full' ? 'همگام‌سازی کامل' : 'همگام‌سازی تغییرات'} «${c.name}» به‌صورت دستی` }));
     kick(c.id, kind, req.user.id);
-    audit(req, { action: 'sync', entity: 'company', id: c.id, summary: `${kind === 'full' ? 'همگام‌سازی کامل' : 'همگام‌سازی تغییرات'} «${c.name}» به‌صورت دستی` });
     return reply.code(202).send({ started: true });
   });
 
@@ -184,8 +192,11 @@ module.exports = async function companyRoutes(app) {
   app.post('/companies/:id/webhook-secret', async (req) => {
     const c = one(req.params.id);
     const secret = crypto.randomBytes(24).toString('base64url');
-    db.run('UPDATE companies SET webhook_secret = ?, updated_at = ? WHERE id = ?', secret, nowIso(), c.id);
-    audit(req, { action: 'update', entity: 'company', id: c.id, summary: `ساخت رمز جدید افزونه برای «${c.name}» (رمز قبلی دیگر کار نمی‌کند)` });
+    db.tx(() => {
+      db.run('UPDATE companies SET webhook_secret = ?, updated_at = ? WHERE id = ?', secret, nowIso(), c.id);
+      audit(req, { action: 'update', entity: 'company', id: c.id, summary: `ساخت رمز جدید افزونه برای «${c.name}» (رمز قبلی دیگر کار نمی‌کند)` });
+      events.emit('company', { id: c.id });
+    });
     return { company: view(one(c.id), req) };
   });
 };

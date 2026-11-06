@@ -19,8 +19,10 @@ module.exports = async function warehouseRoutes(app) {
     const body = z.object({ name: text('نام انبار', 60), notes: optText(1000).optional() }).parse(req.body || {});
     if (db.get('SELECT 1 FROM warehouses WHERE name = ?', body.name)) throw conflict('انباری با این نام هست.', { name: 'تکراری است.' });
     const now = nowIso();
-    const id = Number(db.run('INSERT INTO warehouses (name, notes, created_at, updated_at) VALUES (?, ?, ?, ?)', body.name, body.notes ?? null, now, now).lastInsertRowid);
-    audit(req, { action: 'create', entity: 'warehouse', id, summary: `افزودن انبار «${body.name}»` });
+    db.tx(() => {
+      const id = Number(db.run('INSERT INTO warehouses (name, notes, created_at, updated_at) VALUES (?, ?, ?, ?)', body.name, body.notes ?? null, now, now).lastInsertRowid);
+      audit(req, { action: 'create', entity: 'warehouse', id, summary: `افزودن انبار «${body.name}»` });
+    });
     return { items: list() };
   });
 
@@ -36,12 +38,12 @@ module.exports = async function warehouseRoutes(app) {
     const after = { ...before, name: body.name, notes: body.notes ?? null, active: body.active ? 1 : 0 };
     const yn = (r) => ({ ...r, active: r.active ? 'بله' : 'خیر' });
     const changes = audit.diff(yn(before), yn(after), FIELDS);
-    if (changes.length) {
+    if (changes.length) db.tx(() => {
       db.run('UPDATE warehouses SET name = ?, notes = ?, active = ?, updated_at = ?, version = version + 1 WHERE id = ? AND version = ?',
         after.name, after.notes, after.active, nowIso(), before.id, before.version).changes ||
         concurrency.stale(db.get('SELECT * FROM warehouses WHERE id = ?', before.id), { entity: 'warehouse', label: 'این انبار' });
       audit(req, { action: 'update', entity: 'warehouse', id: before.id, summary: `ویرایش انبار «${after.name}»`, changes });
-    }
+    });
     return { items: list() };
   });
 };

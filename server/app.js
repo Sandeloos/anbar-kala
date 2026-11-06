@@ -19,6 +19,7 @@ const { createEvents } = require('./lib/events');
 const { createSecrets } = require('./lib/secrets');
 const { createSettings } = require('./lib/settings');
 const { createSync } = require('./lib/sync');
+const { createStock } = require('./lib/stock');
 const { createOrders } = require('./lib/orders');
 const { createReturns } = require('./lib/returns');
 const { createStatements } = require('./lib/statements');
@@ -67,18 +68,19 @@ async function buildApp(config, { logger, fetchImpl } = {}) {
 
   const db = openDatabase(path.join(config.dataDir, 'anbar.db'));
   const metrics = createMetrics();
-  const events = createEvents();
+  const events = createEvents({ db });
   const secrets = createSecrets(config.secret);
   const settings = createSettings(db);
-  const audit = createAudit(db, events);
+  const audit = createAudit(db, events, { strict: !config.production, onLoose: (err) => app.log.error({ err }, 'audit outside a transaction') });
   const sync = createSync({ db, config, secrets, events, log: app.log, fetchImpl, metrics });
-  const orders = createOrders({ db, sync, events, audit });
-  const returns = createReturns({ db, orders, events, audit });
+  const stock = createStock({ db, audit, events });
+  const orders = createOrders({ db, sync, events, audit, stock });
+  const returns = createReturns({ db, orders, stock, events, audit });
   const statements = createStatements({ db, audit, events });
   const tasks = createTasks({ db, events, audit, settings });
   sync.onChanges(tasks.onChanges);
   const ctx = {
-    config, db, events, secrets, settings, audit, sync, orders, returns, statements, tasks, metrics,
+    config, db, events, secrets, settings, audit, sync, stock, orders, returns, statements, tasks, metrics,
     backups: createBackups({ db, config }),
     auth: createAuth({ db, config }),
     limit: createLimiter({ factor: config.relaxLimits ? 100 : 1 }),

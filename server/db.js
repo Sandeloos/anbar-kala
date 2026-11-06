@@ -3,6 +3,10 @@
  * SQLite through Node's built-in node:sqlite (no native add-on to compile).
  * One file in DATA_DIR, WAL mode, foreign keys on, numbered SQL migrations
  * from server/migrations applied in order and tracked in PRAGMA user_version.
+ *
+ * db.tx(fn) is the unit of work: every command writes its rows, its audit line and its stock
+ * moves inside one; live events raised meanwhile are held back until COMMIT (db.afterCommit)
+ * and dropped on ROLLBACK, so browsers never hear about a change that did not happen.
  */
 const fs = require('fs');
 const crypto = require('crypto');
@@ -43,6 +47,8 @@ function openDatabase(file) {
     return s;
   };
   let depth = 0;
+  let afterCommit = [];
+  let savepoint = 0;
 
   const db = {
     raw,
@@ -50,21 +56,46 @@ function openDatabase(file) {
     all: (sql, ...p) => stmt(sql).all(...args(p)),
     run: (sql, ...p) => stmt(sql).run(...args(p)),
     exec: (sql) => raw.exec(sql),
-    /** Runs fn inside a transaction (nested calls join the outer one). */
+    /** True while a transaction is open (audit rows and stock moves must be written inside one). */
+    get inTransaction() { return depth > 0; },
+    /**
+     * Runs fn inside one transaction (the unit of work). A nested call becomes a SAVEPOINT, so
+     * an inner failure that the caller catches rolls back only the inner part. fn must be
+     * synchronous: an awaited step would run after COMMIT, outside the transaction.
+     */
     tx(fn) {
-      if (depth > 0) return fn();
-      raw.exec('BEGIN IMMEDIATE');
+      const outer = depth === 0;
+      const name = outer ? null : `sp${++savepoint}`;
+      raw.exec(outer ? 'BEGIN IMMEDIATE' : `SAVEPOINT ${name}`);
+      const queued = afterCommit.length;
       depth++;
+      let result;
       try {
-        const result = fn();
-        raw.exec('COMMIT');
-        return result;
+        result = fn();
+        if (result && typeof result.then === 'function') {
+          throw new Error('db.tx(fn): fn returned a promise; a transaction must not span an await');
+        }
       } catch (err) {
-        raw.exec('ROLLBACK');
-        throw err;
-      } finally {
         depth--;
+        raw.exec(outer ? 'ROLLBACK' : `ROLLBACK TO ${name}; RELEASE ${name}`);
+        afterCommit.length = queued; // what the failed part announced never happened
+        throw err;
       }
+      depth--;
+      if (!outer) { raw.exec(`RELEASE ${name}`); return result; }
+      raw.exec('COMMIT');
+      const run = afterCommit;
+      afterCommit = [];
+      for (const cb of run) {
+        // The data is committed: a failing listener must not turn the request into an error
+        try { cb(); } catch (err) { process.emitWarning(`after-commit callback failed: ${err && err.stack ? err.stack : err}`); }
+      }
+      return result;
+    },
+    /** Runs cb once the current transaction commits (dropped if it rolls back); at once outside one. */
+    afterCommit(cb) {
+      if (depth > 0) afterCommit.push(cb);
+      else cb();
     },
     /**
      * Runs fn with the append-only guards lifted (the triggers check the maintenance table).

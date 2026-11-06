@@ -68,6 +68,17 @@
 - **refresh** / **lookup**: one product on demand; "add by link" resolves a product URL (slug or
   `?p=`) and picks the variation from `attribute_*` query parameters.
 
+## Design rules (design review, ADR 0006)
+- **Unit of work:** every command is one `db.tx` (nested = SAVEPOINT, never across an `await`) holding its
+  rows, its stock moves and its audit line; events wait for COMMIT (`db.afterCommit`) and vanish on ROLLBACK.
+- **One owner per money table** (checked by `tests/unit/architecture.test.js`): `lib/stock.js` → stock_moves,
+  `lib/audit.js` → audit_log, `lib/sync.js` → price_history, `lib/statements.js` → statements,
+  `lib/orders.js` → order_lines, `lib/returns.js` → returns, `lib/tasks.js` → tasks.
+- **Layers:** routes = HTTP edge (validation with zod, read-side queries, unit conversion); `lib/*` = the
+  domain (rules, writes); the domain never imports routes or Fastify.
+- **Sync never goes backwards:** a snapshot older than the last write of a product is skipped unless the site
+  says it is newer; the inbox commits with the product change.
+
 ## Reliability (engineering pass)
 - **The database enforces the rules** (`migrations/005_integrity.sql`): `audit_log` and `price_history`
   are append-only; `stock_moves` rows are frozen except `reversed_by` (set once) and `value`, and stock of

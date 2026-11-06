@@ -16,8 +16,10 @@ module.exports = async function meRoutes(app) {
     const after = { ...before, name: body.name, phone: keep('phone'), email: keep('email') };
     const changes = audit.diff(before, after, PROFILE_FIELDS);
     if (changes.length) {
-      db.run('UPDATE users SET name = ?, phone = ?, email = ?, updated_at = ? WHERE id = ?', after.name, after.phone, after.email, nowIso(), req.user.id);
-      audit(req, { action: 'update', entity: 'user', id: req.user.id, summary: 'ویرایش پروفایل', changes });
+      db.tx(() => {
+        db.run('UPDATE users SET name = ?, phone = ?, email = ?, updated_at = ?, version = version + 1 WHERE id = ?', after.name, after.phone, after.email, nowIso(), req.user.id);
+        audit(req, { action: 'update', entity: 'user', id: req.user.id, summary: 'ویرایش پروفایل', changes });
+      });
     }
     return { user: publicUser(db.get('SELECT * FROM users WHERE id = ?', req.user.id)) };
   });
@@ -30,10 +32,13 @@ module.exports = async function meRoutes(app) {
     if (body.current === body.next) throw badRequest('رمز جدید باید با رمز فعلی فرق داشته باشد.', { next: 'با رمز فعلی یکی است.' });
     if (body.next.toLowerCase().includes(row.username.toLowerCase())) throw badRequest('رمز نباید شامل نام کاربری باشد.', { next: 'شامل نام کاربری است.' });
     const now = nowIso();
-    db.run('UPDATE users SET password_hash = ?, must_change_password = 0, password_changed_at = ?, updated_at = ? WHERE id = ?',
-      await hashPassword(body.next), now, now, req.user.id);
-    const others = auth.endOthers(req.user.id, req.user.session);
-    audit(req, { action: 'password', entity: 'user', id: req.user.id, summary: 'تغییر رمز عبور' + (others ? ` (خروج از ${others} دستگاه دیگر)` : '') });
+    const hash = await hashPassword(body.next);
+    const others = db.tx(() => {
+      db.run('UPDATE users SET password_hash = ?, must_change_password = 0, password_changed_at = ?, updated_at = ? WHERE id = ?', hash, now, now, req.user.id);
+      const n = auth.endOthers(req.user.id, req.user.session);
+      audit(req, { action: 'password', entity: 'user', id: req.user.id, summary: 'تغییر رمز عبور' + (n ? ` (خروج از ${n} دستگاه دیگر)` : '') });
+      return n;
+    });
     return { ok: true, signed_out_others: others };
   });
 
@@ -44,8 +49,11 @@ module.exports = async function meRoutes(app) {
   });
 
   app.delete('/me/sessions/others', async (req) => {
-    const n = auth.endOthers(req.user.id, req.user.session);
-    if (n) audit(req, { action: 'logout', entity: 'user', id: req.user.id, summary: `خروج از ${n} دستگاه دیگر` });
+    const n = db.tx(() => {
+      const ended = auth.endOthers(req.user.id, req.user.session);
+      if (ended) audit(req, { action: 'logout', entity: 'user', id: req.user.id, summary: `خروج از ${ended} دستگاه دیگر` });
+      return ended;
+    });
     return { ended: n };
   });
 

@@ -32,16 +32,16 @@ module.exports = async function systemRoutes(app) {
   app.post('/system/integrity', manager, async (req) => {
     const report = integrity.run();
     const failed = report.results.filter((c) => !c.ok);
-    app.ctx.audit(req, {
+    db.tx(() => app.ctx.audit(req, {
       action: 'check', entity: 'settings', id: null,
       summary: failed.length ? `بررسی سلامت داده‌ها: ${failed.length} مورد مشکل (${failed.map((c) => c.label).join('، ')})` : 'بررسی سلامت داده‌ها: همه‌چیز درست است'
-    });
+    }));
     return { report };
   });
 
   app.post('/system/backup', manager, async (req) => {
     const b = backups.now(settings.get('backup_keep'));
-    app.ctx.audit(req, { action: 'backup', entity: 'settings', id: null, summary: `نسخه‌ی پشتیبان دستی: ${b.name}` });
+    db.tx(() => app.ctx.audit(req, { action: 'backup', entity: 'settings', id: null, summary: `نسخه‌ی پشتیبان دستی: ${b.name}` }));
     return { backup: b, backups: backups.list() };
   });
 
@@ -49,7 +49,7 @@ module.exports = async function systemRoutes(app) {
   app.get('/system/backups/:name', manager, async (req, reply) => {
     const file = backups.file(req.params.name);
     if (!file) throw notFound('نسخه‌ی پشتیبان پیدا نشد.');
-    app.ctx.audit(req, { action: 'download', entity: 'settings', id: null, summary: `دانلود نسخه‌ی پشتیبان ${req.params.name}` });
+    db.tx(() => app.ctx.audit(req, { action: 'download', entity: 'settings', id: null, summary: `دانلود نسخه‌ی پشتیبان ${req.params.name}` }));
     return reply.type('application/vnd.sqlite3').header('Content-Disposition', `attachment; filename="${req.params.name}"`).send(fs.createReadStream(file));
   });
 };

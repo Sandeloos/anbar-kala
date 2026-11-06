@@ -12,13 +12,45 @@ const { badRequest, nowIso, toRial, searchKey, toLatinDigits } = require('../lib
 const { parseDateTime } = require('../lib/jalali');
 const { FIELDS, parseFile, guessMapping, num, cellText } = require('../lib/importer');
 
-const uploads = new Map(); // token → { headers, rows, fileName, at }
-setInterval(() => { const t = Date.now(); for (const [k, v] of uploads) if (t - v.at > 30 * 60e3) uploads.delete(k); }, 60e3).unref();
+/**
+ * Parsed files waiting for preview/commit: per app instance (not module-global), tied to the
+ * user who uploaded them and to the platform, forgotten after 30 minutes.
+ */
+function createUploads() {
+  const items = new Map(); // token → { userId, platformId, headers, rows, fileName, at }
+  const TTL = 30 * 60e3;
+  const prune = () => { const t = Date.now(); for (const [k, v] of items) if (t - v.at > TTL) items.delete(k); };
+  const timer = setInterval(prune, 60e3);
+  timer.unref();
+  return {
+    put(value) {
+      prune();
+      const token = crypto.randomBytes(12).toString('base64url');
+      items.set(token, { ...value, at: Date.now() });
+      return token;
+    },
+    get(token, userId, platformId) {
+      const up = items.get(token);
+      if (!up || up.userId !== userId || up.platformId !== platformId || Date.now() - up.at > TTL) {
+        throw badRequest('فایل منقضی شده؛ دوباره بارگذاری کنید.');
+      }
+      return up;
+    },
+    close() { clearInterval(timer); items.clear(); }
+  };
+}
 
 const mappingSchema = z.record(z.string(), z.preprocess((v) => (v === '' || v === null || v === undefined ? undefined : Number(v)), z.number().int().min(0).optional()));
 
 module.exports = async function importRoutes(app) {
   const { db, orders, audit, events } = app.ctx;
+  const uploads = createUploads();
+  app.addHook('onClose', async () => uploads.close());
+  const platformRow = (id) => {
+    const pl = db.get('SELECT * FROM platforms WHERE id = ?', id);
+    if (!pl) throw badRequest('پلتفرم پیدا نشد.', { platform_id: 'پیدا نشد.' });
+    return pl;
+  };
 
   app.get('/imports/fields', async () => ({ fields: Object.fromEntries(Object.entries(FIELDS).map(([k, v]) => [k, v.label])) }));
 
@@ -27,8 +59,8 @@ module.exports = async function importRoutes(app) {
     let parsed;
     try { parsed = await parseFile(Buffer.from(b.data, 'base64'), b.file_name); } catch (err) { throw badRequest(err.message); }
     if (!parsed.rows.length) throw badRequest('در فایل ردیفی پیدا نشد.');
-    const token = crypto.randomBytes(12).toString('base64url');
-    uploads.set(token, { ...parsed, fileName: b.file_name, at: Date.now() });
+    platformRow(b.platform_id);
+    const token = uploads.put({ ...parsed, fileName: b.file_name, userId: req.user.id, platformId: b.platform_id });
     const saved = db.get('SELECT mapping FROM import_mappings WHERE platform_id = ?', b.platform_id);
     let mapping = saved ? JSON.parse(saved.mapping) : null;
     // A saved mapping is used only when the file still has the same columns
@@ -45,9 +77,7 @@ module.exports = async function importRoutes(app) {
   });
 
   /** Reads every row with the mapping and matches it to listings. */
-  function readRows(token, platformId, mapping, priceUnit) {
-    const up = uploads.get(token);
-    if (!up) throw badRequest('فایل منقضی شده؛ دوباره بارگذاری کنید.');
+  function readRows(up, platformId, mapping, priceUnit) {
     for (const f of ['order_number', 'date', 'qty']) {
       if (mapping[f] === undefined) throw badRequest(`ستون «${FIELDS[f].label}» را مشخص کنید.`);
     }
@@ -92,7 +122,7 @@ module.exports = async function importRoutes(app) {
 
   app.post('/imports/preview', async (req) => {
     const b = z.object(commonBody).parse(req.body || {});
-    const rows = readRows(b.token, b.platform_id, b.mapping, b.price_unit);
+    const rows = readRows(uploads.get(b.token, req.user.id, b.platform_id), b.platform_id, b.mapping, b.price_unit);
     const unmatched = new Map();
     for (const r of rows) if (!r.listing && !r.skip && r.key) {
       const u = unmatched.get(r.key) || { key: r.key, code: r.code, title: r.title, rows: 0 };
@@ -114,26 +144,30 @@ module.exports = async function importRoutes(app) {
       ...commonBody,
       links: z.record(z.string(), z.object({ product_id: z.number().int(), units: z.number().int().min(1) })).optional()
     }).parse(req.body || {});
-    const up = uploads.get(b.token);
-    if (!up) throw badRequest('فایل منقضی شده؛ دوباره بارگذاری کنید.');
-    const pl = db.get('SELECT * FROM platforms WHERE id = ?', b.platform_id);
-    // 1) Listings the admin linked during the preview
+    const up = uploads.get(b.token, req.user.id, b.platform_id);
+    const pl = platformRow(b.platform_id);
+    // 1) Listings the admin linked during the preview (all or none)
     const now = nowIso();
-    let listingsCreated = 0;
-    for (const [key, link] of Object.entries(b.links || {})) {
-      const p = db.get('SELECT * FROM products WHERE id = ?', link.product_id);
-      if (!p) continue;
-      const sample = readRows(b.token, b.platform_id, b.mapping, b.price_unit).find((r) => r.key === key);
-      const code = sample && sample.code ? sample.code : null;
-      if (code && db.get('SELECT 1 FROM listings WHERE platform_id = ? AND code = ?', pl.id, code)) continue;
-      const title = sample ? sample.title || null : key;
-      const id = Number(db.run(`INSERT INTO listings (platform_id, product_id, code, title, units, search_text, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        pl.id, p.id, code, title, link.units, searchKey([code, title, p.name].filter(Boolean).join(' ')), now, now).lastInsertRowid);
-      audit(req, { action: 'create', entity: 'listing', id, summary: `افزودن آگهی ${pl.name}${code ? ` (${code})` : ''} برای «${p.name}» هنگام ورود از فایل` });
-      listingsCreated++;
-    }
-    // 2) Orders, grouped by order number
-    const rows = readRows(b.token, b.platform_id, b.mapping, b.price_unit).filter((r) => !r.skip && !r.problems.length && r.listing);
+    const firstRows = readRows(up, pl.id, b.mapping, b.price_unit);
+    const listingsCreated = db.tx(() => {
+      let n = 0;
+      for (const [key, link] of Object.entries(b.links || {})) {
+        const p = db.get('SELECT * FROM products WHERE id = ?', link.product_id);
+        if (!p) continue;
+        const sample = firstRows.find((r) => r.key === key);
+        const code = sample && sample.code ? sample.code : null;
+        if (code && db.get('SELECT 1 FROM listings WHERE platform_id = ? AND code = ?', pl.id, code)) continue;
+        const title = sample ? sample.title || null : key;
+        const id = Number(db.run(`INSERT INTO listings (platform_id, product_id, code, title, units, search_text, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          pl.id, p.id, code, title, link.units, searchKey([code, title, p.name].filter(Boolean).join(' ')), now, now).lastInsertRowid);
+        audit(req, { action: 'create', entity: 'listing', id, summary: `افزودن آگهی ${pl.name}${code ? ` (${code})` : ''} برای «${p.name}» هنگام ورود از فایل` });
+        n++;
+      }
+      if (n) events.emit('listings', {});
+      return n;
+    });
+    // 2) Orders, grouped by order number (rows read again: the new listings now match)
+    const rows = readRows(up, pl.id, b.mapping, b.price_unit).filter((r) => !r.skip && !r.problems.length && r.listing);
     const groups = new Map();
     for (const r of rows) {
       if (!groups.has(r.order_number)) groups.set(r.order_number, []);
@@ -154,12 +188,14 @@ module.exports = async function importRoutes(app) {
       }
     }
     const skipped = up.rows.length - linesCreated;
-    db.run('UPDATE imports SET orders_created = ?, lines_created = ?, skipped = ? WHERE id = ?', ordersCreated, linesCreated, skipped, importId);
-    db.run(`INSERT INTO import_mappings (platform_id, mapping, updated_at) VALUES (?, ?, ?)
-            ON CONFLICT(platform_id) DO UPDATE SET mapping = excluded.mapping, updated_at = excluded.updated_at`,
-    pl.id, JSON.stringify({ columns: b.mapping, price_unit: b.price_unit, _headers: up.headers }), now);
-    audit(req, { action: 'import', entity: 'import', id: importId, summary: `ورود سفارش‌های ${pl.name} از «${up.fileName}»: ${ordersCreated} سفارش، ${linesCreated} قلم${listingsCreated ? `، ${listingsCreated} آگهی جدید` : ''}${errors.length ? `، ${errors.length} سفارش ناموفق` : ''}` });
-    events.emit('orders', { import: importId });
+    db.tx(() => {
+      db.run('UPDATE imports SET orders_created = ?, lines_created = ?, skipped = ? WHERE id = ?', ordersCreated, linesCreated, skipped, importId);
+      db.run(`INSERT INTO import_mappings (platform_id, mapping, updated_at) VALUES (?, ?, ?)
+              ON CONFLICT(platform_id) DO UPDATE SET mapping = excluded.mapping, updated_at = excluded.updated_at`,
+      pl.id, JSON.stringify({ columns: b.mapping, price_unit: b.price_unit, _headers: up.headers }), now);
+      audit(req, { action: 'import', entity: 'import', id: importId, summary: `ورود سفارش‌های ${pl.name} از «${up.fileName}»: ${ordersCreated} سفارش، ${linesCreated} قلم${listingsCreated ? `، ${listingsCreated} آگهی جدید` : ''}${errors.length ? `، ${errors.length} سفارش ناموفق` : ''}` });
+      events.emit('orders', { import: importId });
+    });
     return { orders_created: ordersCreated, lines_created: linesCreated, listings_created: listingsCreated, skipped, errors };
   });
 };
