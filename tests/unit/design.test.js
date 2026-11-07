@@ -214,3 +214,25 @@ test('stock ledger: consigned stock belongs only to the product\'s own company (
   assert.equal((await api.post('/api/stock/adjust', { product_id: p.id, warehouse_id: 1, owner_company_id: a.id, units: 3, note: 'آزمایش' })).status, 200);
   assert.equal((await api.post('/api/stock/adjust', { product_id: p.id, warehouse_id: 1, owner_company_id: 'own', units: 1, note: 'آزمایش' })).status, 200);
 });
+
+test('sync: a site that suddenly lists nothing does not mark every product removed', async (t) => {
+  const { ctx, api, c } = await signedIn(t);
+  const s = await shop(ctx, { count: 5, seed: 28 });
+  const comp = await addCompany(ctx, api, s);
+  const active = () => ctx.db.get('SELECT COUNT(*) AS n FROM products WHERE company_id = ? AND removed_at IS NULL', comp.id).n;
+  const before = active();
+  assert.ok(before > 0);
+  s.listNothing();
+  await assert.rejects(c.sync.fullSync(comp.id), (e) => e.code === 'empty_catalogue');
+  assert.equal(active(), before, 'nothing marked removed');
+  const row = ctx.db.get('SELECT sync_state, sync_error FROM companies WHERE id = ?', comp.id);
+  assert.equal(row.sync_state, 'error');
+  assert.match(row.sync_error, /هیچ کالایی برنگرداند/);
+  // A real deletion of one product is still noticed once the site lists again
+  s.listNothing(false);
+  await s.remove(s.products.find((p) => p.type === 'simple').id);
+  ctx.db.run('UPDATE companies SET next_sync_at = NULL WHERE id = ?', comp.id);
+  const run = await c.sync.fullSync(comp.id);
+  assert.equal(run.removed, 1);
+});
+

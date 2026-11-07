@@ -59,7 +59,8 @@
 
 ## Sync
 - **full**: every product page (100 per request, `_fields` trimmed) + variations of variable products
-  (4 parents in parallel); items the site no longer lists get `removed_at`.
+  (4 parents in parallel); items the site no longer lists get `removed_at` — unless the site listed nothing at all
+  while we know active products (`empty_catalogue` error, nothing removed; a closed shop is deactivated instead).
 - **incremental**: `modified_after` = last run − 2 minutes; variations of changed parents re-read.
   Stock changes caused by orders do not touch `date_modified` in WooCommerce, so the plugin
   (or the next full sync) catches those.

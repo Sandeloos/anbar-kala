@@ -107,6 +107,7 @@ function createMockWoo({
   const stats = { requests: 0 };
   let push = null; // { url, secret }
   let failNext = 0;
+  let listsNothing = false; // a broken site (cache, plugin conflict) that answers 200 with an empty list
 
   const all = () => {
     const out = [];
@@ -191,7 +192,7 @@ function createMockWoo({
     let m;
     if (route === '/settings/general/woocommerce_currency') return send(res, 200, { id: 'woocommerce_currency', value: currency });
     if (route === '/products') {
-      let list = products.slice().sort((a, b) => a.id - b.id);
+      let list = (listsNothing ? [] : products).slice().sort((a, b) => a.id - b.id);
       if (q.get('slug')) list = list.filter((p) => p.slug === q.get('slug'));
       if (q.get('include')) { const ids = q.get('include').split(',').map(Number); list = list.filter((p) => ids.includes(p.id)); }
       if (q.get('modified_after')) {
@@ -261,7 +262,8 @@ function createMockWoo({
       return changed;
     },
     pushTo(target) { push = target; },
-    failRequests(n) { failNext = n; }
+    failRequests(n) { failNext = n; },
+    listNothing(on = true) { listsNothing = on; }
   };
   return shop;
 }
