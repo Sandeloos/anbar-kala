@@ -1,0 +1,5 @@
+Rubik - Copyright (c) The Rubik Project Authors (https://github.com/googlefonts/rubik)
+Redistributed under the SIL Open Font License, Version 1.1: https://openfontlicense.org
+
+The font is self-hosted so the app renders the same everywhere, including
+networks where Google Fonts is unreachable (the server runs in Iran).
