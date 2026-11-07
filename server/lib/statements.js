@@ -14,8 +14,8 @@
  * never change (decision 1); voiding one (manager, with a reason) un-bills its items.
  */
 const ExcelJS = require('exceljs');
-const { nowIso, badRequest, notFound, conflict, CURRENCIES, fromRial } = require('./util');
-const { monthOf, monthBounds, monthLabel, isMonth, jalaliDateTime } = require('./jalali');
+const { nowIso, inFuture, badRequest, notFound, conflict, CURRENCIES, fromRial } = require('./util');
+const { monthOf, monthBounds, monthLabel, isMonth, jalaliDateTime, tehranDay } = require('./jalali');
 
 const SECTIONS = {
   sales: 'فروش‌های ارسال‌شده از کالای شرکت',
@@ -220,6 +220,9 @@ function createStatements({ db, audit, events }) {
     const s = db.get('SELECT * FROM statements WHERE id = ?', Number(id));
     if (!s) throw notFound('صورت‌حساب پیدا نشد.');
     if (s.status !== 'issued') throw conflict(s.status === 'paid' ? 'این صورت‌حساب قبلاً تسویه شده است.' : 'این صورت‌حساب باطل شده است.');
+    // Paid after it was issued, and not in the future
+    if (paidAt && inFuture(paidAt)) throw badRequest('تاریخ تسویه نمی‌تواند در آینده باشد.', { paid_at: 'در آینده است.' });
+    if (paidAt && tehranDay(paidAt).date < tehranDay(s.issued_at).date) throw badRequest('تاریخ تسویه نمی‌تواند قبل از صدور صورت‌حساب باشد.', { paid_at: 'قبل از صدور است.' });
     const c = company(s.company_id);
     db.tx(() => {
       // Only an issued statement moves to paid, even if two people press the button together
