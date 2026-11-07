@@ -76,6 +76,8 @@
   `lib/orders.js` → order_lines, `lib/returns.js` → returns, `lib/tasks.js` → tasks.
 - **Layers:** routes = HTTP edge (validation with zod, read-side queries, unit conversion); `lib/*` = the
   domain (rules, writes); the domain never imports routes or Fastify.
+- **Stock ownership:** stock of a product is ours (`owner_company_id` NULL) or its own company's; `stock.move` refuses
+  any other owner (otherwise sales from it would land on another company's statement).
 - **Sync never goes backwards:** a snapshot older than the last write of a product is skipped unless the site
   says it is newer; the inbox commits with the product change.
 

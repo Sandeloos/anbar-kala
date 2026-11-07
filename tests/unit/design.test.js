@@ -195,3 +195,22 @@ test('imports: an uploaded file belongs to the person (and platform) that upload
   assert.equal((await api.post('/api/imports/parse', { platform_id: 999, file_name: 'a.csv', data: Buffer.from(csv).toString('base64') })).status, 400);
   assert.ok(crypto);
 });
+
+test('stock ledger: consigned stock belongs only to the product\'s own company (or to us)', async (t) => {
+  const { ctx, api, c } = await signedIn(t);
+  const s1 = await shop(ctx, { count: 2, seed: 26, variableRatio: 0 });
+  const s2 = await shop(ctx, { count: 2, seed: 27, variableRatio: 0, name: 'دیگری' });
+  const a = await addCompany(ctx, api, s1);
+  const b = await addCompany(ctx, api, s2);
+  const p = ctx.db.get('SELECT id FROM products WHERE company_id = ? ORDER BY id LIMIT 1', a.id);
+  for (const owner of [b.id, 999]) {
+    const adj = await api.post('/api/stock/adjust', { product_id: p.id, warehouse_id: 1, owner_company_id: owner, units: 3, note: 'آزمایش' });
+    assert.equal(adj.status, 400, `owner ${owner}: ${JSON.stringify(adj.body)}`);
+    assert.equal(adj.body.fields.owner_company_id, 'صاحب کالا درست نیست.');
+    const cnt = await api.post('/api/stock/count', { warehouse_id: 1, counts: [{ product_id: p.id, owner_company_id: owner, counted: 2 }] });
+    assert.equal(cnt.status, 400);
+  }
+  assert.equal(c.stock.balance(p.id, 1, b.id), 0, 'nothing recorded under the other company');
+  assert.equal((await api.post('/api/stock/adjust', { product_id: p.id, warehouse_id: 1, owner_company_id: a.id, units: 3, note: 'آزمایش' })).status, 200);
+  assert.equal((await api.post('/api/stock/adjust', { product_id: p.id, warehouse_id: 1, owner_company_id: 'own', units: 1, note: 'آزمایش' })).status, 200);
+});
