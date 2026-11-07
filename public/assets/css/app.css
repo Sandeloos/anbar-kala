@@ -451,6 +451,20 @@ a.list-item:hover { background: #fafbfe; }
 .callout-err { background: var(--red-soft); color: #8a2306; }
 .callout-info { background: var(--blue-soft); color: var(--blue-ink); }
 .callout-warn { background: var(--amber-soft); color: #7c3a06; }
+
+/* ---------- In-app training ---------- */
+.help-link { display: flex; justify-content: flex-end; margin-bottom: -8px; }
+.help-tip { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 14px 16px; border-radius: 14px; background: var(--blue-soft); color: var(--blue-ink); }
+.help-tip > .icon { flex: none; }
+.help-tip-text { flex: 1 1 260px; min-width: 0; }
+.help-tip-text p { font-size: 13.5px; line-height: 1.9; }
+.help-tip-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.guide { display: grid; gap: 16px; line-height: 1.9; }
+.guide h3 { font-size: 14px; margin-bottom: 8px; }
+.guide-notes { display: grid; gap: 6px; padding-inline-start: 20px; list-style: disc; font-size: 13.5px; }
+.guide-routines { grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); }
+.guide-card > h2 { font-size: 16px; margin-bottom: 10px; }
+.guide-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
 .copy-field { display: flex; gap: 6px; }
 .copy-field input { flex: 1; min-width: 0; direction: ltr; text-align: left; font-size: 13.5px; }
 .progress { height: 8px; border-radius: 99px; background: var(--line-2); overflow: hidden; }

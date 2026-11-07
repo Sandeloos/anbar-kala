@@ -58,6 +58,8 @@ decision taken with them: `docs/decisions.md` (Persian) — read it before chang
 - `public/index.html` (shell, icon sprite, dialogs) + `assets/css/app.css` + `assets/js/`
   (`app.js` router/shell/palette, `api.js`, `ui.js`, `live.js`, `views/<section>.js` each exporting
   `render(view, ctx, params)`; handlers are assigned as `view.onclick = …` so the next view replaces them).
+  In-app training: `assets/js/help.js` holds one guide per section (`GUIDES`), `views/guide.js` is the training
+  page. A new section or sub-page needs a guide, and its labels must match the screen (`tests/e2e/help.spec.js`).
 - `wordpress-plugin/anbar-connector/` — the WooCommerce plugin that pushes changes (signed HMAC);
   served as a zip from `/api/plugin/anbar-connector.zip`. `tests/php/plugin-harness.php` runs it
   under PHP with WordPress stand-ins; `tests/unit/plugin.test.js` feeds its output to the server.

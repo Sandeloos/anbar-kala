@@ -7,6 +7,7 @@
 import { get, post, onAuthProblem, newSession } from './api.js';
 import { $, $$, esc, icon, fa, toast, busy, fieldErrors, showError, formValues, confirm, ROLES, initials, colorFor, debounce, money, latin } from './ui.js';
 import { connect, disconnect, subscribe } from './live.js';
+import { helpStrip } from './help.js';
 
 const SECTIONS = [
   { group: 'کار روزانه', path: 'dashboard', label: 'داشبورد', icon: 'grid', load: () => import('./views/dashboard.js') },
@@ -25,6 +26,7 @@ const SECTIONS = [
   { group: 'مدیریت', path: 'users', label: 'کاربران', icon: 'users', manager: true, load: () => import('./views/users.js') },
   { group: 'مدیریت', path: 'activity', label: 'گزارش فعالیت', icon: 'pulse', load: () => import('./views/activity.js') },
   { group: 'مدیریت', path: 'settings', label: 'تنظیمات', icon: 'gear', manager: true, load: () => import('./views/settings.js') },
+  { group: 'مدیریت', path: 'guide', label: 'آموزش', icon: 'info', load: () => import('./views/guide.js') },
   { path: 'profile', label: 'پروفایل من', icon: 'user', hidden: true, load: () => import('./views/profile.js') }
 ];
 
@@ -203,6 +205,8 @@ async function route() {
     return;
   }
   renderNav(section.path);
+  const help = helpStrip(section.path, params, ctx.me.username);
+  if (help) root.prepend(help);
   const token = ++renderToken;
   root.setAttribute('aria-busy', 'true');
   document.title = `${section.label} | انبار`;
