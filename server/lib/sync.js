@@ -332,8 +332,14 @@ function createSync({ db, config, secrets, events, log, fetchImpl, metrics }) {
         page++;
       } while (page <= pages);
       (await fetchVariations(client, comp, parents, run, 'sync')).forEach((id) => seen.add(id));
-      // Anything we had that the site no longer lists has been deleted there
+      // Anything we had that the site no longer lists has been deleted there — unless the site
+      // listed nothing at all: that is a broken answer (a cache or plugin returning an empty page),
+      // and believing it would mark every product removed and stop order entry for the company.
+      // A company that really closed its shop is deactivated instead (nothing is deleted).
       const known = db.all('SELECT woo_id FROM products WHERE company_id = ? AND removed_at IS NULL', comp.id).map((r) => r.woo_id);
+      if (!seen.size && known.length) {
+        throw new WooError('empty_catalogue', `سایت هیچ کالایی برنگرداند، در حالی که ${known.length} کالای فعال از آن داریم؛ چیزی حذف‌شده علامت نخورد. سایت را بررسی کنید (اگر واقعاً بسته شده، شرکت را غیرفعال کنید).`);
+      }
       run.removed = markRemoved(comp, known.filter((id) => !seen.has(id)), nowIso());
       finishRun(comp, run, null, client);
       return run;
