@@ -8,7 +8,8 @@
  *  - Only units the company was paid for can go back to it for a credit: units it shipped
  *    plus units taken from its surplus in our warehouse.
  */
-const { nowIso, badRequest, notFound, conflict } = require('./util');
+const { nowIso, inFuture, badRequest, notFound, conflict } = require('./util');
+const { tehranDay } = require('./jalali');
 
 const DISPOSITION_LABEL = { kept: 'نگه داشتیم (قابل فروش)', to_company: 'برگشت به شرکت', damaged: 'معیوب' };
 
@@ -44,7 +45,12 @@ function createReturns({ db, orders, stock, events, audit }) {
       if (!Number.isInteger(units) || units < 1) throw badRequest('تعداد مرجوعی را درست وارد کنید.', { units: 'عدد صحیح' });
       if (units > c.returnable) throw badRequest(`از این ردیف حداکثر ${c.returnable} عدد قابل مرجوع است (${c.shipped} ارسال شده، ${c.returned} قبلاً مرجوع شده).`, { units: `حداکثر ${c.returnable}` });
       const wh = warehouseId || stock.defaultWarehouse({ productWarehouseId: l.product_warehouse_id, companyWarehouseId: l.company_warehouse_id });
+      // A return arrives after the goods left (received_at, or the order time) and not in the future
       const at = returnedAt || nowIso();
+      if (inFuture(at)) throw badRequest('تاریخ رسیدن مرجوعی نمی‌تواند در آینده باشد.', { returned_at: 'در آینده است.' });
+      const shippedAt = l.received_at || l.ordered_at;
+      // Compared by Tehran calendar day: a date typed without a time (midnight) on the shipping day is fine
+      if (shippedAt && tehranDay(at).date < tehranDay(shippedAt).date) throw badRequest('تاریخ رسیدن مرجوعی نمی‌تواند قبل از ارسال سفارش باشد.', { returned_at: 'قبل از ارسال است.' });
       const rid = Number(db.run(`INSERT INTO returns (order_line_id, company_id, product_id, units, warehouse_id, reason, returned_at, user_id, created_at)
                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, l.id, l.company_id, l.product_id, units, wh, reason || null, at, userId, nowIso()).lastInsertRowid);
       stock.move({ productId: l.product_id, warehouseId: wh, ownerId: null, units, kind: 'return_in', lineId: l.id, returnId: rid, userId, note: reason || 'مرجوعی مشتری' });

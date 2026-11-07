@@ -21,6 +21,9 @@ const conflict = (msg, fields, code) => new HttpError(409, msg, { ...(fields ? {
 /* ------------------------------------------------------------ time */
 const TZ = 'Asia/Tehran';
 const nowIso = () => new Date().toISOString();
+/** Clocks of phones and servers differ a little: a time this far ahead still counts as "now". */
+const CLOCK_SKEW_MS = 5 * 60e3;
+const inFuture = (iso) => new Date(iso).getTime() > Date.now() + CLOCK_SKEW_MS;
 
 /* ------------------------------------------------------------ text */
 const FA_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
@@ -123,7 +126,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 module.exports = {
   HttpError, badRequest, notFound, forbidden, conflict,
-  TZ, nowIso,
+  TZ, nowIso, inFuture,
   toLatinDigits, searchKey, normalisePhone, normaliseSiteUrl,
   CURRENCIES, PRICE_UNITS, toRial, fromRial,
   token, sha256, tempPassword, hashPassword, verifyPassword, safeEqual,
