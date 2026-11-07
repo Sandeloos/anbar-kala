@@ -91,7 +91,8 @@
   manual SQL edit gets an error instead of corrupting the books. `db.maintenance(fn)` lifts the guards
   for one transaction (demo back-dating, reviewed repairs only).
 - **Migrations** are checksummed (`schema_migrations`): a migration edited after it ran refuses to start.
-- **Integrity check** (`lib/integrity.js`): nightly after the backup and on demand (Settings → سلامت داده‌ها):
+- **Integrity check** (`lib/integrity.js`): nightly after the backup and on demand (Settings → سلامت داده‌ها); a failed
+  report, or backups older than 36 h, show as an alert on the manager's dashboard (`/api/dashboard` → `system`):
   SQLite `quick_check`, foreign keys, negative stock, reversal pairs, line arithmetic, stock picks vs.
   ledger, returns ≤ shipped, statement totals = items, no key billed twice, one live statement per month.
   Every unit test ends with it, so each scenario is also an invariant test.

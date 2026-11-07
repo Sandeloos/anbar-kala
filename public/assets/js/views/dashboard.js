@@ -16,6 +16,19 @@ function syncState(c) {
   return '<span class="state state-ok">وصل</span>';
 }
 
+/** Manager only: the nightly integrity check failed, or backups stopped. */
+function systemAlerts(sys) {
+  if (!sys) return '';
+  const out = [];
+  if (sys.integrity && !sys.integrity.ok) {
+    out.push(`<div class="callout callout-err" role="alert">${icon('alert')}<div><strong>بررسی سلامت داده‌ها مشکل پیدا کرد</strong> (${when(sys.integrity.at, 'full')}): ${esc(sys.integrity.failed.join('، '))}. قبل از هر کاری یک نسخه‌ی پشتیبان بگیرید. <a class="link" href="#/settings">جزئیات در تنظیمات</a></div></div>`);
+  }
+  if (sys.backup.late) {
+    out.push(`<div class="callout callout-warn">${icon('download')}<span>${sys.backup.last_at ? `آخرین نسخه‌ی پشتیبان ${when(sys.backup.last_at, 'full')} گرفته شده؛ پشتیبان‌گیری شبانه انجام نشده است.` : 'هنوز هیچ نسخه‌ی پشتیبانی گرفته نشده است.'} <a class="link" href="#/settings">پشتیبان‌گیری همین الان</a></span></div>`);
+  }
+  return out.join('');
+}
+
 export async function render(view, ctx) {
   view.innerHTML = `<div class="page-head"><div><h1>${esc(greeting(ctx.me.name))}</h1><p>خلاصه‌ی وضعیت شرکت‌ها و قیمت‌ها</p></div></div>${skeleton(6)}`;
 
@@ -27,6 +40,7 @@ export async function render(view, ctx) {
         <div><h1>${esc(greeting(ctx.me.name))}</h1><p>خلاصه‌ی وضعیت شرکت‌ها و قیمت‌ها؛ این صفحه خودش به‌روز می‌شود.</p></div>
         <div class="page-actions"><a class="btn" href="#/receiving">${icon('truck')}دریافت روزانه</a><a class="btn btn-primary" href="#/orders/new">${icon('plus')}سفارش جدید</a></div>
       </div>
+      ${systemAlerts(d.system)}
       ${errors.length ? `<div class="callout callout-err" role="alert">${icon('alert')}<div><strong>اتصال ${fa(errors.length)} شرکت مشکل دارد:</strong> ${errors.map((c) => `<a class="link" href="#/companies/${c.id}">${esc(c.name)}</a>`).join('، ')}. قیمت‌های این شرکت‌ها تا رفع مشکل به‌روز نمی‌شود.</div></div>` : ''}
       <div class="metrics">
         <a class="metric" href="#/orders?period=today">${icon('cart')}<strong>${fa(d.ops.orders_today)}</strong><span>سفارش امروز (${fa(d.ops.lines_today)} قلم)</span></a>
