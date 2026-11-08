@@ -53,7 +53,8 @@
   platforms other than the company site it opens or updates one task per (listing, kind) and closes it
   when the value returns. Done records the price set on the platform into `listings.platform_price`.
 - Backups (`lib/backup.js`): `VACUUM INTO DATA_DIR/backups/anbar-<Tehran time>.db`, nightly from `jobs.js`
-  and on demand (`/api/system/backup`, manager), pruned to `backup_keep`.
+  and on demand (`/api/system/backup`, manager), pruned to `backup_keep`. Each copy is verified (opened read-only,
+  `quick_check`, same `user_version`) before older ones are pruned; a bad copy is deleted and the backup fails.
 - Deployment: `docker-compose.yml` (app + Caddy for HTTPS, `Caddyfile`), `.env.example`, CI saves the
   image as an artifact for servers without registry access. Guide: `docs/deploy.md` (Persian).
 
