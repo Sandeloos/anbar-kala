@@ -16,7 +16,9 @@ test('enter an order with the keyboard; the live site price and the amount show 
   await signIn(page);
   await page.goto('/#/orders/new');
   await expect(page.locator('#o-number')).toBeFocused();
-  await page.fill('#o-number', '700100');
+  // A new number on every attempt, so a CI retry does not meet the order the first attempt saved
+  const number = String(700000 + (Date.now() % 100000));
+  await page.fill('#o-number', number);
   await page.click('[data-now]');
   await page.fill('#o-pick', 'قاشق');
   await expect(page.locator('.picker-list [role="option"]').first()).toBeVisible();
@@ -31,7 +33,7 @@ test('enter an order with the keyboard; the live site price and the amount show 
   await expect(page.locator('#o-number')).toHaveValue('');
 
   // The same number again is refused with a link to the existing order
-  await page.fill('#o-number', '700100');
+  await page.fill('#o-number', number);
   await page.click('[data-now]');
   await page.fill('#o-pick', 'قاشق');
   await expect(page.locator('.picker-list [role="option"]').first()).toBeVisible();
@@ -40,7 +42,7 @@ test('enter an order with the keyboard; the live site price and the amount show 
   await page.click('#o-save');
   await expect(page.locator('#o-number').locator('xpath=..').locator('.error')).toContainText('تکراری');
   await page.locator('text=دیدن سفارش ثبت‌شده').click();
-  await expect(page.locator('#view h1')).toContainText(faDigits('700100'));
+  await expect(page.locator('#view h1')).toContainText(faDigits(number));
   await expect(page.locator('.table tbody tr').first()).toContainText('منتظر دریافت');
 });
 
@@ -51,7 +53,7 @@ test('daily receiving: one right, one too many into stock, then undo', async ({ 
   const pick = await (await page.request.get('/api/pick?q=' + encodeURIComponent('لیوان') + '&products_only=1')).json();
   for (const [i, it] of pick.items.slice(0, 2).entries()) {
     const r = await page.request.post('/api/orders', { headers: { 'x-anbar': '1' },
-      data: { platform_id: 1, order_number: `RCV-${i}`, ordered_at: new Date().toISOString(), lines: [{ product_id: it.product_id, qty: 1 }] } });
+      data: { platform_id: 1, order_number: `RCV-${Date.now().toString(36)}-${i}`, ordered_at: new Date().toISOString(), lines: [{ product_id: it.product_id, qty: 1 }] } });
     expect(r.status()).toBe(200);
   }
   await page.goto('/#/receiving?scope=all');
