@@ -3,6 +3,7 @@
 const { z, optText, intIn, amount, text } = require('./validate');
 const { clampInt, searchKey, toRial, badRequest } = require('../lib/util');
 const { parseDateTime } = require('../lib/jalali');
+const { companyAmountSql } = require('../lib/orders');
 
 const money = (label) => z.preprocess((v) => (v === '' || v === null || v === undefined ? null : v), amount(label).nullable()).optional();
 const when = z.preprocess((v) => (v ? parseDateTime(v) : null), z.string({ error: 'تاریخ و ساعت سفارش را وارد کنید.' }));
@@ -60,7 +61,7 @@ module.exports = async function orderRoutes(app) {
         (SELECT COUNT(*) FROM order_lines x WHERE x.order_id = o.id AND (x.settle_manual = 1 OR x.price_uncertain = 1)) AS flagged,
         (SELECT GROUP_CONCAT(name, '، ') FROM (SELECT DISTINCT c.name FROM order_lines x JOIN companies c ON c.id = x.company_id WHERE x.order_id = o.id)) AS companies,
         (SELECT GROUP_CONCAT(p.name, '، ') FROM order_lines x JOIN products p ON p.id = x.product_id WHERE x.order_id = o.id) AS products,
-        (SELECT SUM(x.qty * x.settle_unit_price) FROM order_lines x WHERE x.order_id = o.id) AS settle_total
+        (SELECT SUM(${companyAmountSql('x')}) FROM order_lines x WHERE x.order_id = o.id) AS settle_total
       ${sql} ORDER BY o.ordered_at DESC, o.id DESC LIMIT ? OFFSET ?`, ...params, per, (page - 1) * per);
     return { items, total, page, pages: Math.max(1, Math.ceil(total / per)) };
   });
