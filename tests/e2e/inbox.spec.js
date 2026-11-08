@@ -15,10 +15,11 @@ const H = { 'x-anbar': '1' };
 test('a price change on the company site shows up in the inbox live; done records our new Digikala price', async ({ page }, testInfo) => {
   laptopOnly(testInfo);
   await signIn(page);
+  const code = `DK-INBOX-${Date.now().toString(36)}`; // unique per attempt (CI retries)
   const pick = await (await page.request.get(`/api/pick?q=${encodeURIComponent('جعبه')}&products_only=1`)).json();
   const it = pick.items.find((x) => x.company_name === 'شرکت آزمایشی');
   const product = await (await page.request.get(`/api/products/${it.product_id}`)).json();
-  const li = await page.request.post('/api/listings', { headers: H, data: { platform_id: 1, product_id: it.product_id, code: 'DK-INBOX', units: it.units_per_pack, platform_price: '900000' } });
+  const li = await page.request.post('/api/listings', { headers: H, data: { platform_id: 1, product_id: it.product_id, code, units: it.units_per_pack, platform_price: '900000' } });
   expect(li.status(), await li.text()).toBe(200);
 
   await page.goto('/#/inbox');
@@ -26,7 +27,7 @@ test('a price change on the company site shows up in the inbox live; done record
   // The fake shop changes the price and pushes it like the WordPress plugin
   const newPrice = Math.round(product.product.regular_price / 10 * 1.2 / 100) * 100;
   await page.request.post('http://127.0.0.1:4181/__mock/price', { data: { id: product.product.woo_id, regular: newPrice } });
-  const card = page.locator('.task', { hasText: 'DK-INBOX' });
+  const card = page.locator('.task', { hasText: code });
   await expect(card).toBeVisible({ timeout: 10000 });
   await expect(card).toContainText('پیشنهاد');
   await card.getByRole('button', { name: 'انجام شد' }).click();
@@ -35,7 +36,7 @@ test('a price change on the company site shows up in the inbox live; done record
   await page.click('#f-done button[type=submit]');
   await expect(card).toHaveCount(0);
   await page.getByRole('button', { name: 'بسته‌شده' }).click();
-  await expect(page.locator('.task', { hasText: 'DK-INBOX' })).toContainText('۱٬۰۸۰٬۰۰۰');
+  await expect(page.locator('.task', { hasText: code })).toContainText('۱٬۰۸۰٬۰۰۰');
 });
 
 test('settings: take a backup now and see it in the list', async ({ page }, testInfo) => {
