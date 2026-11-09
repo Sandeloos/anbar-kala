@@ -24,6 +24,7 @@ const { createOrders } = require('./lib/orders');
 const { createReturns } = require('./lib/returns');
 const { createStatements } = require('./lib/statements');
 const { createTasks } = require('./lib/tasks');
+const { createDigikala } = require('./lib/digikala');
 const { createBackups } = require('./lib/backup');
 const { createIntegrity } = require('./lib/integrity');
 const { createMetrics } = require('./lib/metrics');
@@ -77,10 +78,12 @@ async function buildApp(config, { logger, fetchImpl } = {}) {
   const orders = createOrders({ db, sync, events, audit, stock });
   const returns = createReturns({ db, orders, stock, events, audit });
   const statements = createStatements({ db, audit, events });
-  const tasks = createTasks({ db, events, audit, settings });
+  const digikala = createDigikala({ db, secrets, audit, events, log: app.log, fetchImpl, retryBaseMs: config.production ? 1000 : 20 });
+  const tasks = createTasks({ db, events, audit, settings, autoPriced: digikala.handles });
   sync.onChanges(tasks.onChanges);
+  sync.onChanges(digikala.onChanges);
   const ctx = {
-    config, db, events, secrets, settings, audit, sync, stock, orders, returns, statements, tasks, metrics,
+    config, db, events, secrets, settings, audit, sync, stock, orders, returns, statements, tasks, digikala, metrics,
     backups: createBackups({ db, config }),
     auth: createAuth({ db, config }),
     limit: createLimiter({ factor: config.relaxLimits ? 100 : 1 }),
@@ -237,7 +240,7 @@ async function buildApp(config, { logger, fetchImpl } = {}) {
     // Retried writes (same Idempotency-Key) get the first answer instead of running twice
     api.addHook('preHandler', ctx.idempotency.before);
     api.addHook('onSend', ctx.idempotency.after);
-    for (const r of ['auth', 'me', 'users', 'companies', 'warehouses', 'products', 'listings', 'orders', 'receiving', 'stock', 'imports', 'returns', 'statements', 'tasks', 'system', 'activity', 'dashboard', 'settings', 'events']) {
+    for (const r of ['auth', 'me', 'users', 'companies', 'warehouses', 'products', 'listings', 'orders', 'receiving', 'stock', 'imports', 'returns', 'statements', 'tasks', 'digikala', 'system', 'activity', 'dashboard', 'settings', 'events']) {
       await api.register(require(`./routes/${r}`));
     }
   }, { prefix: '/api' });

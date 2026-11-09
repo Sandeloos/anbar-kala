@@ -15,7 +15,7 @@ function suggest(platformPrice, before, after) {
 }
 const isLow = (status, qty, limit) => status === 'instock' && qty !== null && qty !== undefined && qty <= limit;
 
-function createTasks({ db, events, audit, settings }) {
+function createTasks({ db, events, audit, settings, autoPriced = () => false }) {
   function listingsOf(productId) {
     return db.all(`SELECT l.* FROM listings l JOIN platforms pl ON pl.id = l.platform_id
                    WHERE l.product_id = ? AND l.active = 1 AND pl.active = 1 AND pl.code <> 'site'`, productId);
@@ -32,7 +32,8 @@ function createTasks({ db, events, audit, settings }) {
         const listings = listingsOf(c.productId);
         if (!listings.length) continue;
         for (const l of listings) {
-          if (c.priceChanged && c.before.regular_price !== c.after.regular_price) {
+          // A listing priced automatically (Digikala robot) needs no manual price task
+          if (c.priceChanged && c.before.regular_price !== c.after.regular_price && !autoPriced(l)) {
             const open = db.get("SELECT * FROM tasks WHERE listing_id = ? AND kind = 'price' AND status = 'open'", l.id);
             if (open) {
               if (c.after.regular_price === open.site_price_before) {

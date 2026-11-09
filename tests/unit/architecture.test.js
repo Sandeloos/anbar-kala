@@ -31,7 +31,9 @@ const OWNERS = {
   order_lines: ['lib/orders.js'],
   returns: ['lib/returns.js'],
   tasks: ['lib/tasks.js'],
-  idempotency_keys: ['lib/idempotency.js']
+  idempotency_keys: ['lib/idempotency.js'],
+  dk_jobs: ['lib/digikala.js'],
+  dk_connection: ['lib/digikala.js']
 };
 
 test('each money table is written by its owner module only', () => {
