@@ -69,6 +69,14 @@
 - **refresh** / **lookup**: one product on demand; "add by link" resolves a product URL (slug or
   `?p=`) and picks the variation from `attribute_*` query parameters.
 
+## Digikala automatic pricing (ADR 0007)
+- `lib/digikala-api.js` (seller Open API client: self-token from the RSA-encrypted code, refresh, retries) and
+  `lib/digikala.js` (formula per listing, `dk_jobs` queue, worker, decisions; only writer of `dk_jobs`, `dk_connection`).
+- Site price change → `sync.onChanges` queues jobs in the product transaction → worker (after commit, every minute)
+  → unchanged / waits for approval above 30 % / dry run / sent; refused → variant off, stock 0, reference-price ticket,
+  listing `blocked` until an admin re-activates. Page `#/digikala`; formula fields on the listing form.
+- `tools/mock-digikala.js` for tests and the demo (port 8094).
+
 ## Design rules (design review, ADR 0006)
 - **Unit of work:** every command is one `db.tx` (nested = SAVEPOINT, never across an `await`) holding its
   rows, its stock moves and its audit line; events wait for COMMIT (`db.afterCommit`) and vanish on ROLLBACK.
