@@ -165,6 +165,7 @@ async function buildApp(config, { logger, fetchImpl } = {}) {
       reply.header('Cache-Control', 'no-cache');
     }
     if (req.url.startsWith('/api/')) reply.header('Cache-Control', 'no-store');
+    if (req.url.startsWith('/assets/')) reply.header('Cache-Control', 'no-cache');
     return payload;
   });
 
@@ -190,7 +191,9 @@ async function buildApp(config, { logger, fetchImpl } = {}) {
   /* ------------------------------------------------------------ static + app shell */
   const publicDir = path.join(config.root, 'public');
   await app.register(require('@fastify/static'), {
-    root: path.join(publicDir, 'assets'), prefix: '/assets/', maxAge: config.production ? '1h' : 0, etag: true
+    // Scripts are not versioned in their names, so the browser asks every time (a cheap 304 with the
+    // ETag) instead of keeping a copy: after a deploy everyone gets the new code at once, never a mix.
+    root: path.join(publicDir, 'assets'), prefix: '/assets/', maxAge: 0, etag: true
   });
   const shell = () => fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
   const cachedShell = config.production ? shell() : null;

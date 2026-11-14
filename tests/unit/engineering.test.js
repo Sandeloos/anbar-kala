@@ -287,3 +287,14 @@ test('jalali: 20 000 random days round-trip between the calendars', () => {
     assert.deepEqual(j, [part('year'), part('month'), part('day')], `matches Intl for ${d.toISOString()}`);
   }
 });
+
+test('scripts are revalidated on every load (no stale code after a deploy), cheaply with a 304', async (t) => {
+  const ctx = await makeApp();
+  t.after(ctx.cleanup);
+  const first = await ctx.app.inject({ method: 'GET', url: '/assets/js/app.js' });
+  assert.equal(first.statusCode, 200);
+  assert.equal(first.headers['cache-control'], 'no-cache');
+  assert.ok(first.headers.etag);
+  const again = await ctx.app.inject({ method: 'GET', url: '/assets/js/app.js', headers: { 'if-none-match': first.headers.etag } });
+  assert.equal(again.statusCode, 304);
+});
