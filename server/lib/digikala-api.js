@@ -69,21 +69,34 @@ function checkPrivateKey(pem) {
 const DEFAULT_USER_AGENT = 'Anbar';
 
 /**
- * Every request carries a User-Agent: Digikala refuses authenticated calls whose User-Agent it does
- * not accept ("Invalid User-Agent!"), so the value is a setting (dk_connection.user_agent).
+ * Since 4 Mehr 1405 Digikala requires, on every self-token request,
+ *   User-Agent: DigikalaTrustedBot/SelfToken/<seller code>
+ * (support's answer; not in the Open API spec). Without it: 401 "Invalid User-Agent!".
+ * The seller code is the token's own `seller_id` claim; dk_connection.user_agent overrides it.
  */
+const trustedUserAgent = (sellerCode) => `DigikalaTrustedBot/SelfToken/${sellerCode}`;
+
+/** The seller code inside an access token (a JWT whose payload carries seller_id); null if absent. */
+function sellerIdOf(accessToken) {
+  try {
+    const p = JSON.parse(Buffer.from(String(accessToken).split('.')[1], 'base64url').toString('utf8'));
+    return Number.isSafeInteger(Number(p.seller_id)) && Number(p.seller_id) > 0 ? Number(p.seller_id) : null;
+  } catch {
+    return null;
+  }
+}
+
 function createDigikalaClient({ baseUrl, tokens, fetchImpl, userAgent, timeoutMs = 20000, retries = 2, retryBaseMs = 1000 }) {
   const doFetch = fetchImpl || globalThis.fetch;
   const root = String(baseUrl || 'https://seller.digikala.com').replace(/\/+$/, '') + '/open-api/v1';
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   async function once(method, path, body, { auth = true } = {}) {
-    const headers = { 'content-type': 'application/json', accept: 'application/json', 'user-agent': userAgent || DEFAULT_USER_AGENT };
-    if (auth) {
-      const t = tokens.get();
-      if (!t || !t.access) throw new DigikalaError('اتصال دیجی‌کالا برقرار نیست؛ از «تنظیمات ← دیجی‌کالا» دوباره وصل شوید.', { code: 'no_token' });
-      headers.authorization = `Bearer ${t.access}`;
-    }
+    const t = auth ? tokens.get() : null;
+    if (auth && (!t || !t.access)) throw new DigikalaError('اتصال دیجی‌کالا برقرار نیست؛ از «قیمت دیجی‌کالا» دوباره وصل شوید.', { code: 'no_token' });
+    const seller = t ? sellerIdOf(t.access) : null;
+    const headers = { 'content-type': 'application/json', accept: 'application/json', 'user-agent': userAgent || (seller ? trustedUserAgent(seller) : DEFAULT_USER_AGENT) };
+    if (t) headers.authorization = `Bearer ${t.access}`;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     let res;
@@ -161,4 +174,4 @@ function tokenPair(d) {
   return { access: d.access_token, refresh: d.refresh_token || null, expiresAt: Number.isNaN(Date.parse(expiresAt)) ? null : expiresAt };
 }
 
-module.exports = { createDigikalaClient, decryptChallenge, checkPrivateKey, DigikalaError, DEFAULT_USER_AGENT };
+module.exports = { createDigikalaClient, decryptChallenge, checkPrivateKey, DigikalaError, DEFAULT_USER_AGENT, trustedUserAgent, sellerIdOf };

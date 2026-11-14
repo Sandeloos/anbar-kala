@@ -7,7 +7,9 @@
  *  - a selling price more than `band` (default 20 %) away from the variant's reference price
  *    (price_list) is refused with errors.selling_price;
  *  - optional rate limit (429 with reset_time);
- *  - optional `userAgent`: authenticated calls with any other User-Agent get 401 "Invalid User-Agent!".
+ *  - access tokens are JWT-shaped with the seller's `seller_id` (as the real ones);
+ *  - optional `userAgent`: authenticated calls with any other User-Agent get 401 "Invalid User-Agent!"
+ *    (`'trusted'` = the real rule, DigikalaTrustedBot/SelfToken/<seller id>).
  *
  *   const dk = await createMockDigikala({ publicKey }).listen(0);
  *   dk.challenge()  → base64 code to paste in the settings page;  dk.variants, dk.tickets, dk.calls
@@ -15,7 +17,7 @@
 const http = require('http');
 const crypto = require('crypto');
 
-function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3, userAgent = null } = {}) {
+function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3, userAgent = null, sellerId = 4242 } = {}) {
   const variants = new Map();
   const tickets = [];
   const calls = [];
@@ -27,7 +29,8 @@ function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3
   let base = '';
 
   const issue = () => {
-    const a = crypto.randomBytes(24).toString('base64url');
+    const part = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+    const a = `${part({ typ: 'JWT', alg: 'HS256' })}.${part({ token_id: access.size + 1, seller_id: sellerId, client_code: 'mock', exp: Math.floor((Date.now() + accessTtlMs) / 1000) })}.${crypto.randomBytes(24).toString('base64url')}`;
     const r = crypto.randomBytes(24).toString('base64url');
     access.set(a, Date.now() + accessTtlMs);
     refresh.add(r);
@@ -60,7 +63,8 @@ function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3
     const token = String(req.headers.authorization || '').replace(/^Bearer /, '');
     const exp = access.get(token);
     if (!exp || exp < Date.now()) return err(res, 401, 'Your access is denied. Please get a new access_token.!');
-    if (api.userAgent && req.headers['user-agent'] !== api.userAgent) return err(res, 401, 'Invalid User-Agent!');
+    const wanted = api.userAgent === 'trusted' ? `DigikalaTrustedBot/SelfToken/${sellerId}` : api.userAgent;
+    if (wanted && req.headers['user-agent'] !== wanted) return err(res, 401, 'Invalid User-Agent!');
 
     let m;
     if (req.method === 'GET' && path === '/variants') {

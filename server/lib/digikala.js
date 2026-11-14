@@ -24,11 +24,11 @@
  */
 const crypto = require('crypto');
 const { nowIso, badRequest, notFound, conflict, searchKey } = require('./util');
-const { createDigikalaClient, decryptChallenge, checkPrivateKey, DigikalaError, DEFAULT_USER_AGENT } = require('./digikala-api');
+const { createDigikalaClient, decryptChallenge, checkPrivateKey, DigikalaError, DEFAULT_USER_AGENT, trustedUserAgent, sellerIdOf } = require('./digikala-api');
 const { guessUnits } = require('./sync');
 
 const MODES = { off: 'خاموش', dry_run: 'آزمایشی (چیزی فرستاده نمی‌شود)', live: 'فعال' };
-const SELF_TOKEN_DAYS = 180;
+const SELF_TOKEN_DAYS = 360; // what the seller panel shows for a new self-token
 
 /** Digikala price of a listing by its formula, in rials (null when it cannot be computed). */
 function priceFor(listing, product) {
@@ -66,12 +66,14 @@ function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseM
   /* ------------------------------------------------------------ connection (manager) */
   function status() {
     const c = conn();
+    const seller = c.access_token_enc ? sellerIdOf(dec(c.access_token_enc)) : null;
     const expires = c.connected_at ? new Date(new Date(c.connected_at).getTime() + SELF_TOKEN_DAYS * 864e5).toISOString() : null;
     const counts = db.get(`SELECT
         SUM(CASE WHEN status = 'needs_approval' THEN 1 ELSE 0 END) AS approval,
         SUM(CASE WHEN status IN ('pending', 'approved') THEN 1 ELSE 0 END) AS queued FROM dk_jobs`);
     return {
-      mode: c.mode, mode_label: MODES[c.mode], base_url: c.base_url, client_code: c.client_code, user_agent: c.user_agent, default_user_agent: DEFAULT_USER_AGENT,
+      mode: c.mode, mode_label: MODES[c.mode], base_url: c.base_url, client_code: c.client_code, seller_code: seller,
+      user_agent: c.user_agent, auto_user_agent: seller ? trustedUserAgent(seller) : DEFAULT_USER_AGENT,
       has_key: !!c.private_key_enc, connected: !!c.access_token_enc, connected_at: c.connected_at, self_token_expires_at: expires,
       self_token_days_left: expires ? Math.floor((new Date(expires).getTime() - Date.now()) / 864e5) : null,
       max_change_pct: c.max_change_pct, ticket_sub_category_id: c.ticket_sub_category_id, last_error: c.last_error, last_ok_at: c.last_ok_at,

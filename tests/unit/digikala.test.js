@@ -190,22 +190,29 @@ test('tokens are refreshed when they expire; rate limits and server errors are r
   assert.ok(dk.calls.some((x) => x.path === '/auth/refresh-token'));
 });
 
-test('the User-Agent setting is sent with every call; a refused one is reported', async (t) => {
+test('User-Agent: DigikalaTrustedBot/SelfToken/<seller code from the token> on every call; a setting overrides it', async (t) => {
   const env = await setup(t);
   const { api, dk } = env;
+  dk.userAgent = 'trusted'; // the real rule since 4 Mehr 1405
   const target = formulaPrice(env.product);
   await connectAndList(env, { variant: { price_list: target, price_sale: target } });
-  assert.ok(dk.calls.filter((x) => x.path !== '/auth/token').every((x) => x.userAgent === 'Anbar'), 'default User-Agent');
-  dk.userAgent = 'SellerApp/2';
+  const st = (await api.get('/api/digikala')).body.status;
+  assert.equal(st.seller_code, 4242, 'read from the token');
+  assert.equal(st.auto_user_agent, 'DigikalaTrustedBot/SelfToken/4242');
+  assert.equal(st.self_token_days_left, 359);
+  const ok = await api.post('/api/digikala/import/preview');
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(dk.calls.at(-1).userAgent, 'DigikalaTrustedBot/SelfToken/4242');
+
+  // A wrong override is refused by Digikala and reported; clearing it goes back to the automatic one
+  assert.equal((await api.put('/api/digikala/settings', { user_agent: 'نامعتبر' })).status, 400, 'ASCII only');
+  assert.equal((await api.put('/api/digikala/settings', { user_agent: 'SellerApp/2' })).status, 200);
   const refused = await api.post('/api/digikala/import/preview');
   assert.equal(refused.status, 400);
   assert.match(refused.body.error, /Invalid User-Agent/);
-  assert.equal((await api.put('/api/digikala/settings', { user_agent: 'نامعتبر' })).status, 400, 'ASCII only');
-  assert.equal((await api.put('/api/digikala/settings', { user_agent: 'SellerApp/2' })).status, 200);
-  const r = await api.post('/api/digikala/import/preview');
-  assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(dk.calls.at(-1).userAgent, 'SellerApp/2');
-  assert.equal((await api.get('/api/digikala')).body.status.user_agent, 'SellerApp/2');
+  assert.equal((await api.put('/api/digikala/settings', { user_agent: '' })).status, 200);
+  assert.equal((await api.post('/api/digikala/import/preview')).status, 200);
 });
 
 test('import: every variant is read, matched by supplier code or name, and only confirmed ones become listings', async (t) => {

@@ -34,6 +34,7 @@ export async function render(view, ctx, params = []) {
         <div><dt>حالت</dt><dd>${s.mode === 'live' ? '<span class="badge badge-green">فعال</span>' : s.mode === 'dry_run' ? '<span class="badge badge-navy">آزمایشی</span>' : '<span class="badge">خاموش</span>'}</dd></div>
         <div><dt>اتصال</dt><dd>${s.connected ? `وصل (${when(s.connected_at, 'date')})` : '<span class="muted">وصل نیست</span>'}</dd></div>
         <div><dt>اعتبار توکن</dt><dd>${s.self_token_days_left === null ? '—' : s.self_token_days_left < 21 ? `<span class="badge badge-red">${fa(s.self_token_days_left)} روز مانده؛ تمدید کنید</span>` : `${fa(s.self_token_days_left)} روز مانده`}</dd></div>
+        <div><dt>کد فروشندگی</dt><dd>${s.seller_code ? `<span class="ltr">${esc(s.seller_code)}</span>` : '—'}</dd></div>
         <div><dt>آگهی‌های خودکار</dt><dd>${fa(s.auto_listings)}</dd></div>
         <div><dt>آخرین ارتباط موفق</dt><dd>${s.last_ok_at ? ago(s.last_ok_at) : '—'}</dd></div>
       </dl>
@@ -48,8 +49,8 @@ export async function render(view, ctx, params = []) {
           <div class="field"><label for="dk-max">سقف تغییر خودکار (٪)</label><input id="dk-max" name="max_change_pct" inputmode="numeric" value="${fa(s.max_change_pct)}"><span class="hint">تغییر بیشتر منتظر تأیید می‌ماند</span></div>
           <div class="field"><label for="dk-ticket">زیردسته‌ی تیکت قیمت مرجع</label><input id="dk-ticket" name="ticket_sub_category_id" inputmode="numeric" dir="ltr" value="${s.ticket_sub_category_id || ''}"><span class="hint">خالی یعنی تیکت دستی ثبت شود</span></div>
         </div>
-        <div class="field"><label for="dk-ua">User-Agent</label><input id="dk-ua" name="user_agent" dir="ltr" autocomplete="off" spellcheck="false" value="${esc(s.user_agent || '')}" placeholder="${esc(s.default_user_agent || '')}">
-          <span class="hint">اگر دیجی‌کالا خطای «Invalid User-Agent» داد، مقداری را که دیجی‌کالا برای برنامه‌ی شما گفته اینجا بگذارید. خالی یعنی «${esc(s.default_user_agent || '')}».</span></div>
+        <div class="field"><label for="dk-ua">User-Agent</label><input id="dk-ua" name="user_agent" dir="ltr" autocomplete="off" spellcheck="false" value="${esc(s.user_agent || '')}" placeholder="${esc(s.auto_user_agent || '')}">
+          <span class="hint">خالی بگذارید: دیجی‌کالا «DigikalaTrustedBot/SelfToken/کد فروشندگی» می‌خواهد و همین خودکار فرستاده می‌شود. فقط اگر دیجی‌کالا مقدار دیگری گفت اینجا بنویسید.</span></div>
         <div class="form-actions"><button class="btn btn-primary" type="submit">${icon('check')}ذخیره</button></div>
       </form>
       <details${s.connected ? '' : ' open'}><summary class="link">${s.connected ? 'اتصال دوباره یا تمدید توکن' : 'وصل کردن به دیجی‌کالا'}</summary>

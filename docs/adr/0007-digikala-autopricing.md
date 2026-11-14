@@ -47,5 +47,8 @@ public key, the panel shows an authorization code encrypted with it (base64, PKC
   each and without automatic pricing. The read list is kept in memory for an hour (`preview_id`), so the client
   only sends ids and units.
 - **User-Agent:** the live API answered authenticated calls with 401 "Invalid User-Agent!" although the spec only
-  requires `content-type`. Every call now sends a User-Agent (`dk_connection.user_agent`, default `Anbar`),
-  editable by the manager; the mock can enforce one (`userAgent`).
+  requires `content-type`. Digikala support: since 4 Mehr 1405 every self-token request must send
+  `User-Agent: DigikalaTrustedBot/SelfToken/<seller code>`. The seller code is the access token's `seller_id`
+  claim, so the client builds the header itself; `dk_connection.user_agent` (manager) overrides it if Digikala
+  changes the rule. The mock issues JWT-shaped tokens with `seller_id` and enforces the rule (`userAgent: 'trusted'`).
+- The self-token is valid for 360 days (the seller panel's own figure), not six months.
