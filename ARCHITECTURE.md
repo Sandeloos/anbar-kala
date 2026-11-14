@@ -59,7 +59,8 @@
 
 ## Sync
 - **full**: every product page (100 per request, `_fields` trimmed) + variations of variable products
-  (4 parents in parallel); items the site no longer lists get `removed_at`.
+  (4 parents in parallel); items the site no longer lists get `removed_at` — unless the site listed nothing at all
+  while we know active products (`empty_catalogue` error, nothing removed; a closed shop is deactivated instead).
 - **incremental**: `modified_after` = last run − 2 minutes; variations of changed parents re-read.
   Stock changes caused by orders do not touch `date_modified` in WooCommerce, so the plugin
   (or the next full sync) catches those.
@@ -67,6 +68,14 @@
   ±5 minutes. The same `normalise()` handles REST and plugin data.
 - **refresh** / **lookup**: one product on demand; "add by link" resolves a product URL (slug or
   `?p=`) and picks the variation from `attribute_*` query parameters.
+
+## Digikala automatic pricing (ADR 0007)
+- `lib/digikala-api.js` (seller Open API client: self-token from the RSA-encrypted code, refresh, retries) and
+  `lib/digikala.js` (formula per listing, `dk_jobs` queue, worker, decisions; only writer of `dk_jobs`, `dk_connection`).
+- Site price change → `sync.onChanges` queues jobs in the product transaction → worker (after commit, every minute)
+  → unchanged / waits for approval above 30 % / dry run / sent; refused → variant off, stock 0, reference-price ticket,
+  listing `blocked` until an admin re-activates. Page `#/digikala`; formula fields on the listing form.
+- `tools/mock-digikala.js` for tests and the demo (port 8094).
 
 ## Design rules (design review, ADR 0006)
 - **Unit of work:** every command is one `db.tx` (nested = SAVEPOINT, never across an `await`) holding its
@@ -76,6 +85,8 @@
   `lib/orders.js` → order_lines, `lib/returns.js` → returns, `lib/tasks.js` → tasks.
 - **Layers:** routes = HTTP edge (validation with zod, read-side queries, unit conversion); `lib/*` = the
   domain (rules, writes); the domain never imports routes or Fastify.
+- **Stock ownership:** stock of a product is ours (`owner_company_id` NULL) or its own company's; `stock.move` refuses
+  any other owner (otherwise sales from it would land on another company's statement).
 - **Sync never goes backwards:** a snapshot older than the last write of a product is skipped unless the site
   says it is newer; the inbox commits with the product change.
 

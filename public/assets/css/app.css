@@ -665,3 +665,14 @@ fieldset.field { border: 0; padding: 0; margin: 0; display: grid; gap: 6px; }
 .chart .bar-g:hover .bar { fill: var(--navy); }
 .chart svg { max-width: 100%; height: auto; }
 .backup-list .list-item { padding-inline: 0; }
+
+/* ------------------------------------------------------------ Digikala automatic pricing */
+.dk-formula { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--navy-soft); }
+.dk-formula[hidden] { display: none; }
+.fieldset-title { margin: 0; font-size: 14px; font-weight: 700; color: var(--navy); }
+.dk-grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1024px) { .dk-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.dk-steps { margin: 0; padding-inline-start: 20px; display: grid; gap: 6px; font-size: 14px; line-height: 1.9; }
+.dk-key { width: 100%; min-height: 120px; direction: ltr; text-align: left; font-size: 12px; line-height: 1.5; }
+.stack { display: grid; gap: 16px; min-width: 0; align-content: start; }
+.dk-grid > * { min-width: 0; }

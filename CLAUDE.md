@@ -45,6 +45,8 @@ decision taken with them: `docs/decisions.md` (Persian) — read it before chang
   `db.tx`: do network work first, then re-check inside the transaction.
 - Stock only through `lib/stock.js` (`move`, `reverse`, `defaultWarehouse`, `saleValue`, …); each money table has
   one writer module (`tests/unit/architecture.test.js`). Sync writes pass `fetchedAt` (time the request was sent).
+- Digikala: only `lib/digikala.js` writes `dk_jobs`/`dk_connection`; network calls never inside `db.tx` (queue first,
+  worker after commit). Test against `tools/mock-digikala.js`, never the real API. ADR 0007.
 - Technical decisions: `docs/adr/`. Operations: `/health`, `/ready`, `/metrics` (METRICS_TOKEN), request ids,
   graceful `app.shutdown()`; config is validated in `config.js` (add new variables to its zod schema).
 

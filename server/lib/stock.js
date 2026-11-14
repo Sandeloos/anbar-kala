@@ -10,7 +10,8 @@
  * Shared rules that used to be repeated in orders, returns and the stock routes live here:
  *  - which warehouse goods go to by default (`defaultWarehouse`, active warehouses only),
  *  - what company-owned units are worth to the company (`saleValue`),
- *  - where a line may be filled from and in which order (`available`, `suggestPicks`).
+ *  - where a line may be filled from and in which order (`available`, `suggestPicks`),
+ *  - who may own stock of a product: us (NULL) or the company the product comes from.
  */
 const { nowIso, badRequest, conflict } = require('./util');
 
@@ -65,6 +66,13 @@ function createStock({ db, audit, events }) {
     if (!KINDS.has(kind)) throw new Error(`unknown stock move kind: ${kind}`);
     const w = warehouseOf(warehouseId);
     if (units > 0 && !w.active && kind !== 'reversal') throw badRequest(`انبار «${w.name}» غیرفعال است؛ کالا را به انبار فعالی ببرید.`, { warehouse_id: 'غیرفعال است.' });
+    // Consigned stock belongs to the company the product comes from, or to us (NULL). Any other
+    // owner would put the value of its sales on another company's statement.
+    const p = db.get('SELECT company_id FROM products WHERE id = ?', productId);
+    if (!p) throw badRequest('کالا پیدا نشد.', { product_id: 'پیدا نشد.' });
+    if (ownerId !== null && ownerId !== undefined && ownerId !== p.company_id) {
+      throw badRequest('صاحب این کالا فقط خودمان یا شرکتی است که کالا مال آن است.', { owner_company_id: 'صاحب کالا درست نیست.' });
+    }
     if (units < 0) {
       const have = balance(productId, warehouseId, ownerId);
       if (have + units < 0) {

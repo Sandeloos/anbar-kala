@@ -21,6 +21,7 @@ const SECTIONS = [
   { group: 'کار روزانه', path: 'changes', label: 'تغییرات قیمت', icon: 'trend', count: 'price_changes_24h', countTitle: 'تغییر در ۲۴ ساعت', load: () => import('./views/changes.js') },
   { group: 'تعریف‌ها', path: 'products', label: 'کالاها', icon: 'box', count: 'needs_setup', countTitle: 'کالای تنظیم‌نشده', load: () => import('./views/products.js') },
   { group: 'تعریف‌ها', path: 'listings', label: 'آگهی‌ها', icon: 'link', load: () => import('./views/listings.js') },
+  { group: 'تعریف‌ها', path: 'digikala', label: 'قیمت دیجی‌کالا', icon: 'trend', count: 'digikala_attention', danger: true, countTitle: 'منتظر تأیید یا متوقف', load: () => import('./views/digikala.js') },
   { group: 'تعریف‌ها', path: 'companies', label: 'شرکت‌ها', icon: 'building', count: 'sync_errors', danger: true, countTitle: 'خطای اتصال', load: () => import('./views/companies.js') },
   { group: 'تعریف‌ها', path: 'warehouses', label: 'انبارها', icon: 'warehouse', load: () => import('./views/warehouses.js') },
   { group: 'مدیریت', path: 'users', label: 'کاربران', icon: 'users', manager: true, load: () => import('./views/users.js') },
@@ -233,6 +234,7 @@ subscribe('products', refreshCountsSoon);
 subscribe('orders', refreshCountsSoon);
 subscribe('returns', refreshCountsSoon);
 subscribe('tasks', refreshCountsSoon);
+subscribe('digikala', refreshCountsSoon);
 subscribe('sync', (d) => { if (d.state !== 'progress') refreshCountsSoon(); });
 
 /* ------------------------------------------------------------ quick search (Ctrl+K) */

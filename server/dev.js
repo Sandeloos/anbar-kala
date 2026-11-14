@@ -48,6 +48,7 @@ async function demo(port) {
   await app.listen({ host: '127.0.0.1', port });
   for (const c of db.all('SELECT id FROM companies')) await app.ctx.sync.fullSync(c.id);
   seedOrders(app);
+  await seedDigikala(app);
   // Inbox: our Digikala/Basalam prices (30% over the site), then three site prices change
   db.run(`UPDATE listings SET platform_price = (SELECT CAST(ROUND(p.regular_price * listings.units * 1.3 / p.units_per_pack / 1000) AS INTEGER) * 1000
           FROM products p WHERE p.id = listings.product_id) WHERE platform_id IN (1, 2)`);
@@ -66,6 +67,39 @@ async function demo(port) {
   console.log(`\nDemo ready: http://127.0.0.1:${port}  (demo / demo-1234 manager, ali / demo-1234 admin)`);
   for (const s of shops) console.log(`  shop "${s.name}" ${s.url}`);
   return app;
+}
+
+/**
+ * Demo only: a fake Digikala seller API (port 8094) with the Digikala listings as its variants.
+ * Anbar is connected to it with a fresh RSA key and prices the listings in live mode, so a site
+ * price change visibly moves the Digikala price; two variants have a low reference price and
+ * show the refused flow (off, stock 0, reference-price ticket).
+ */
+async function seedDigikala(app) {
+  const { createMockDigikala } = require('../tools/mock-digikala');
+  const { db, digikala } = app.ctx;
+  const keys = crypto.generateKeyPairSync('rsa', { modulusLength: 2048, publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } });
+  const dk = await createMockDigikala({ publicKey: keys.publicKey }).listen(8094);
+  const manager = db.get("SELECT id, name FROM users WHERE username = 'demo'");
+  const as = { user: manager, ip: '127.0.0.1' };
+  digikala.setSettings(as, { base_url: dk.url });
+  digikala.setKey(as, keys.privateKey);
+  await digikala.connect(as, { client_code: 'demo-client', challenge: dk.challenge() });
+  const rows = db.all(`SELECT l.id, l.code, l.units, p.regular_price, p.units_per_pack FROM listings l JOIN products p ON p.id = l.product_id
+                       WHERE l.platform_id = 1 AND l.code IS NOT NULL ORDER BY l.id LIMIT 20`);
+  db.tx(() => {
+    rows.forEach((r, i) => {
+      db.run('UPDATE listings SET auto_price = 1, margin_pct = ?, fixed_add = 0, round_to = 10000 WHERE id = ?', 25 + (i % 3) * 5, r.id);
+      const f = digikala.priceFor({ units: r.units, margin_pct: 25 + (i % 3) * 5, fixed_add: 0, round_to: 10000 }, r);
+      if (!f) return;
+      // Most variants sell near our formula; two have a reference price far below it (refused)
+      dk.addVariant({ id: digikala.variantIdOf(r.code), price_list: i < 2 ? Math.round(f.price / 3) : f.price, price_sale: f.price - 10000, credit_increase_percentage: 10, marketplace_seller_stock: 5 + i });
+    });
+  });
+  digikala.setSettings(as, { mode: 'live' });
+  for (const r of rows.slice(0, 4)) digikala.reprice(as, r.id);
+  await digikala.kick();
+  console.log(`  digikala: fake seller API ${dk.url}, ${rows.length} listings priced automatically`);
 }
 
 /**
