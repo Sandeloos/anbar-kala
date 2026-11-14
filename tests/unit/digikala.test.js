@@ -228,11 +228,14 @@ test('import: every variant is read, matched by supplier code or name, and only 
   dk.addVariant({ id: 601, title: 'بسته ۲۵ عددی', product_title: 'لیوان کاغذی ۲۲۰ سی سی', supplier_code: 'cup 220', price_list: 900000, price_sale: 880000 });
   dk.addVariant({ id: 602, product_title: 'بشقاب گیاهی یکبار مصرف', price_list: 500000 });
   dk.addVariant({ id: 603, product_title: 'هدفون بی‌سیم', price_list: 9000000 });
+  // Digikala fills supplier_code with the seller code on every variant (seen on the live API): ignored
+  dk.addVariant({ id: 604, product_title: 'دستمال کاغذی جیبی', supplier_code: '۴۲۴۲', price_list: 300000 });
+  named(others[0].id, 'دستمال کاغذی جیبی', '4242');
   for (let i = 0; i < 60; i++) dk.addVariant({ id: 700 + i, product_title: `کالای آزمایشی ${i}`, price_list: 10000 });
 
   const r = await api.post('/api/digikala/import/preview');
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.equal(r.body.total, 64, 'all pages read');
+  assert.equal(r.body.total, 65, 'all pages read');
   assert.equal(r.body.already_linked, 1);
   const by = Object.fromEntries(r.body.items.map((x) => [x.variant_id, x]));
   assert.equal(by[501], undefined, 'linked variants are left out');
@@ -243,6 +246,8 @@ test('import: every variant is read, matched by supplier code or name, and only 
   assert.equal(by[602].suggestions[0].product_id, others[1].id);
   assert.equal(by[602].suggestions[0].why, 'name');
   assert.deepEqual(by[603].suggestions, [], 'no guess when nothing is close');
+  assert.equal(by[604].supplier_code, null, 'the seller code is not a product code');
+  assert.equal(by[604].suggestions[0].why, 'name', 'matched by name, not by the seller code');
   assert.equal(r.body.items[0].variant_id, 601, 'best matches first');
 
   const bad = await api.post('/api/digikala/import', { preview_id: 'nope-nope-nope', rows: [{ variant_id: 601, product_id: product.id, units: 25 }] });

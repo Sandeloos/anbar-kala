@@ -395,6 +395,14 @@ function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseM
 
     const linked = new Set(db.all('SELECT code FROM listings WHERE platform_id = ?', platformId()).map((l) => variantIdOf(l.code)).filter(Boolean));
     const fresh = all.map(variantView).filter((v) => v.variant_id && !linked.has(v.variant_id));
+    // A supplier code that is the seller's own code, or the same on many variants, says nothing about the product
+    const seller = String(sellerIdOf(dec(c.access_token_enc)) || '');
+    const counts = new Map();
+    for (const v of all.map(variantView)) { const k = codeKey(v.supplier_code || ''); if (k) counts.set(k, (counts.get(k) || 0) + 1); }
+    for (const v of fresh) {
+      const k = codeKey(v.supplier_code || '');
+      if (k && (k === seller || counts.get(k) > 5)) v.supplier_code = null;
+    }
     const match = createMatcher(db.all(`SELECT p.id, p.name, p.sku, p.units_per_pack, p.regular_price, p.company_id, c.name AS company_name, c.currency
                                         FROM products p JOIN companies c ON c.id = p.company_id WHERE p.removed_at IS NULL AND c.active = 1`));
     const items = fresh.map((v) => ({ ...v, suggestions: match(v) }));
