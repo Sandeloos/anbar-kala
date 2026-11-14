@@ -29,7 +29,7 @@ test('every section in the menu and its sub-pages have a guide', async ({ page }
   await signIn(page);
   const links = await page.locator('#side-nav .nav-item').evaluateAll((els) => els.map((a) => a.getAttribute('href')));
   expect(links).toContain('#/guide');
-  const routes = [...links.filter((h) => h !== '#/guide'), '#/orders/new', '#/orders/import', '#/companies/new', '#/companies/1', '#/count', '#/profile'];
+  const routes = [...links.filter((h) => h !== '#/guide'), '#/orders/new', '#/orders/import', '#/companies/new', '#/companies/1', '#/count', '#/profile', '#/digikala/import'];
   for (const href of routes) {
     await page.goto(`/${href}`);
     await expect(page.locator('#view')).toHaveAttribute('aria-busy', 'false');

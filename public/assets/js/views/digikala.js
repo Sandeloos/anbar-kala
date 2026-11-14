@@ -14,7 +14,8 @@ const STATUS = {
 };
 const badge = (s) => `<span class="badge ${(STATUS[s] || [])[1] || ''}">${esc((STATUS[s] || [s])[0])}</span>`;
 
-export async function render(view, ctx) {
+export async function render(view, ctx, params = []) {
+  if (params[0] === 'import') return (await import('./digikala-import.js')).render(view, ctx);
   view.innerHTML = skeleton(6);
   const isManager = ctx.me.role === 'manager';
   let d = null;
@@ -47,6 +48,8 @@ export async function render(view, ctx) {
           <div class="field"><label for="dk-max">سقف تغییر خودکار (٪)</label><input id="dk-max" name="max_change_pct" inputmode="numeric" value="${fa(s.max_change_pct)}"><span class="hint">تغییر بیشتر منتظر تأیید می‌ماند</span></div>
           <div class="field"><label for="dk-ticket">زیردسته‌ی تیکت قیمت مرجع</label><input id="dk-ticket" name="ticket_sub_category_id" inputmode="numeric" dir="ltr" value="${s.ticket_sub_category_id || ''}"><span class="hint">خالی یعنی تیکت دستی ثبت شود</span></div>
         </div>
+        <div class="field"><label for="dk-ua">User-Agent</label><input id="dk-ua" name="user_agent" dir="ltr" autocomplete="off" spellcheck="false" value="${esc(s.user_agent || '')}" placeholder="${esc(s.default_user_agent || '')}">
+          <span class="hint">اگر دیجی‌کالا خطای «Invalid User-Agent» داد، مقداری را که دیجی‌کالا برای برنامه‌ی شما گفته اینجا بگذارید. خالی یعنی «${esc(s.default_user_agent || '')}».</span></div>
         <div class="form-actions"><button class="btn btn-primary" type="submit">${icon('check')}ذخیره</button></div>
       </form>
       <details${s.connected ? '' : ' open'}><summary class="link">${s.connected ? 'اتصال دوباره یا تمدید توکن' : 'وصل کردن به دیجی‌کالا'}</summary>
@@ -78,7 +81,7 @@ export async function render(view, ctx) {
     const approval = d.attention.filter((j) => j.status === 'needs_approval');
     view.innerHTML = `
       <div class="page-head"><div><h1>قیمت دیجی‌کالا</h1><p>قیمت آگهی‌های دیجی‌کالا با تغییر قیمت سایت شرکت، با فرمول همان آگهی خودکار عوض می‌شود. فرمول هر بسته‌بندی را در «آگهی‌ها» تعیین کنید.</p></div>
-        <div class="page-actions"><a class="btn" href="#/listings?platform=1">${icon('link')}آگهی‌ها</a></div></div>
+        <div class="page-actions"><a class="btn" href="#/listings?platform=1">${icon('link')}آگهی‌ها</a>${s.connected ? `<a class="btn btn-primary" href="#/digikala/import">${icon('download')}ورود آگهی‌ها از دیجی‌کالا</a>` : ''}</div></div>
       ${s.mode === 'dry_run' ? `<div class="callout callout-info">${icon('info')}<span>حالت آزمایشی: چیزی به دیجی‌کالا فرستاده نمی‌شود؛ فقط ثبت می‌شود که چه قیمتی فرستاده می‌شد.</span></div>` : ''}
       <div class="dk-grid">
         ${connection(s)}
@@ -118,7 +121,8 @@ export async function render(view, ctx) {
         && !(await confirm({ title: 'قیمت‌ها واقعاً فرستاده شود؟', text: 'از این به بعد قیمت آگهی‌های خودکار در دیجی‌کالا عوض می‌شود.', yes: 'فعال کن' }))) throw Object.assign(new Error('لغو شد.'), { fields: {} });
       await put('/digikala/settings', {
         mode: f.elements.mode.value, max_change_pct: f.elements.max_change_pct.value,
-        ticket_sub_category_id: f.elements.ticket_sub_category_id.value.trim() === '' ? null : f.elements.ticket_sub_category_id.value
+        ticket_sub_category_id: f.elements.ticket_sub_category_id.value.trim() === '' ? null : f.elements.ticket_sub_category_id.value,
+        user_agent: f.elements.user_agent.value.trim()
       });
     }, 'تنظیمات ذخیره شد.');
     send($('#dk-key', view), (f) => post('/digikala/key', { private_key: f.elements.private_key.value }).then(() => { f.reset(); }), 'کلید خصوصی ثبت شد.');

@@ -21,7 +21,9 @@ module.exports = async function digikalaRoutes(app) {
       mode: z.enum(['off', 'dry_run', 'live'], { error: 'حالت را انتخاب کنید.' }).optional(),
       max_change_pct: intIn('سقف تغییر خودکار', 1, 300).optional(),
       ticket_sub_category_id: z.preprocess((v) => (v === '' || v === undefined ? undefined : v === null ? null : Number(v)), z.number().int().positive().nullable().optional()),
-      base_url: z.preprocess((v) => (v ? String(v).trim() : undefined), z.url({ protocol: /^https?$/, error: 'آدرس معتبر نیست.' }).optional())
+      base_url: z.preprocess((v) => (v ? String(v).trim() : undefined), z.url({ protocol: /^https?$/, error: 'آدرس معتبر نیست.' }).optional()),
+      user_agent: z.preprocess((v) => (v === undefined ? undefined : String(v ?? '').trim()),
+        z.string().max(300, 'User-Agent خیلی بلند است.').regex(/^[\x20-\x7e]*$/, 'فقط حروف و نشانه‌های انگلیسی.').optional())
     }).parse(req.body || {});
     return { status: digikala.setSettings(req, b) };
   });
@@ -45,6 +47,21 @@ module.exports = async function digikalaRoutes(app) {
   app.post('/digikala/listings/:id/reactivate', async (req) => {
     const b = z.object({ stock: z.preprocess((v) => (v === '' || v === null || v === undefined ? undefined : v), intIn('موجودی', 0, 1000000).optional()) }).parse(req.body || {});
     return { listing: await digikala.reactivate(req, req.params.id, b) };
+  });
+
+  /* Import: read every seller variant with suggested site products, then create the confirmed listings */
+  app.post('/digikala/import/preview', async () => digikala.importPreview());
+
+  app.post('/digikala/import', async (req) => {
+    const b = z.object({
+      preview_id: z.string({ error: 'فهرست خوانده نشده.' }).min(8).max(64),
+      rows: z.array(z.object({
+        variant_id: intIn('کد تنوع', 1, 1e12),
+        product_id: intIn('کالای سایت', 1, 1e9),
+        units: intIn('تعداد عدد در هر فروش', 1, 100000)
+      }), { error: 'چیزی انتخاب نشده.' }).min(1, 'دست‌کم یک تنوع را انتخاب کنید.').max(5000)
+    }).parse(req.body || {});
+    return digikala.importCreate(req, b.preview_id, b.rows);
   });
 
   app.post('/digikala/listings/:id/reprice', async (req) => ({ job: digikala.reprice(req, req.params.id) }));

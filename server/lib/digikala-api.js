@@ -5,6 +5,7 @@
  *
  *   auth/token          { authorization_code }               → access + refresh token
  *   auth/refresh-token  { access_token, refresh_token }      → new pair (always keep the new refresh token)
+ *   GET   variants?page&size                                  → { pager, items } (the seller's variants)
  *   GET   variants/{id}                                       → price_sale, price_list (reference), stock, …
  *   PATCH variants/selling-price { variant_id, selling_price, credit_increase_percentage }
  *   PUT   variants/{id}/activation { activation }
@@ -65,13 +66,19 @@ function checkPrivateKey(pem) {
  * tokens: { get() → { access, refresh, expiresAt } | null, set({ access, refresh, expiresAt }) }
  * The client refreshes an expired (or refused) access token once and repeats the call.
  */
-function createDigikalaClient({ baseUrl, tokens, fetchImpl, timeoutMs = 20000, retries = 2, retryBaseMs = 1000 }) {
+const DEFAULT_USER_AGENT = 'Anbar';
+
+/**
+ * Every request carries a User-Agent: Digikala refuses authenticated calls whose User-Agent it does
+ * not accept ("Invalid User-Agent!"), so the value is a setting (dk_connection.user_agent).
+ */
+function createDigikalaClient({ baseUrl, tokens, fetchImpl, userAgent, timeoutMs = 20000, retries = 2, retryBaseMs = 1000 }) {
   const doFetch = fetchImpl || globalThis.fetch;
   const root = String(baseUrl || 'https://seller.digikala.com').replace(/\/+$/, '') + '/open-api/v1';
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   async function once(method, path, body, { auth = true } = {}) {
-    const headers = { 'content-type': 'application/json', accept: 'application/json' };
+    const headers = { 'content-type': 'application/json', accept: 'application/json', 'user-agent': userAgent || DEFAULT_USER_AGENT };
     if (auth) {
       const t = tokens.get();
       if (!t || !t.access) throw new DigikalaError('اتصال دیجی‌کالا برقرار نیست؛ از «تنظیمات ← دیجی‌کالا» دوباره وصل شوید.', { code: 'no_token' });
@@ -132,6 +139,8 @@ function createDigikalaClient({ baseUrl, tokens, fetchImpl, timeoutMs = 20000, r
       return pair;
     },
     refresh,
+    /** One page of the seller's variants: { pager: { page, total_pages, total_rows }, items }. */
+    variants: ({ page = 1, size = 50 } = {}) => call('GET', `/variants?page=${Number(page)}&size=${Number(size)}&sort=id&order=asc`),
     variant: (id) => call('GET', `/variants/${Number(id)}`),
     setPrice: (id, price, creditIncrease) => call('PATCH', '/variants/selling-price', { variant_id: Number(id), selling_price: price, credit_increase_percentage: creditIncrease }),
     setActive: (id, active) => call('PUT', `/variants/${Number(id)}/activation`, { activation: !!active }),
@@ -152,4 +161,4 @@ function tokenPair(d) {
   return { access: d.access_token, refresh: d.refresh_token || null, expiresAt: Number.isNaN(Date.parse(expiresAt)) ? null : expiresAt };
 }
 
-module.exports = { createDigikalaClient, decryptChallenge, checkPrivateKey, DigikalaError };
+module.exports = { createDigikalaClient, decryptChallenge, checkPrivateKey, DigikalaError, DEFAULT_USER_AGENT };

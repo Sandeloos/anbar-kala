@@ -37,3 +37,15 @@ public key, the panel shows an authorization code encrypted with it (base64, PKC
   refusal is shown and the ticket is filed by hand.
 - Webhooks (`product_variant_status_change`, orders) and order import through the API are possible next steps;
   they need Anbar on a public server.
+
+## Addendum (November 2026): import and User-Agent
+- **Import** (`#/digikala/import`): `GET variants` pages through every seller variant; those whose id is already a
+  Digikala listing code are left out. Each gets up to three suggested site products: the variant's `supplier_code`
+  equal to a product SKU (ignoring case, spaces and dashes) first, then the closest names (Dice coefficient on
+  normalised words). Nothing is linked automatically, because the link decides settlement: a person confirms the
+  product and the units of each sale; the confirmed listings are created in one transaction with an audit line
+  each and without automatic pricing. The read list is kept in memory for an hour (`preview_id`), so the client
+  only sends ids and units.
+- **User-Agent:** the live API answered authenticated calls with 401 "Invalid User-Agent!" although the spec only
+  requires `content-type`. Every call now sends a User-Agent (`dk_connection.user_agent`, default `Anbar`),
+  editable by the manager; the mock can enforce one (`userAgent`).

@@ -189,3 +189,76 @@ test('tokens are refreshed when they expire; rate limits and server errors are r
   assert.notEqual(ctx.db.get('SELECT refresh_token_enc FROM dk_connection').refresh_token_enc, before, 'new refresh token kept');
   assert.ok(dk.calls.some((x) => x.path === '/auth/refresh-token'));
 });
+
+test('the User-Agent setting is sent with every call; a refused one is reported', async (t) => {
+  const env = await setup(t);
+  const { api, dk } = env;
+  const target = formulaPrice(env.product);
+  await connectAndList(env, { variant: { price_list: target, price_sale: target } });
+  assert.ok(dk.calls.filter((x) => x.path !== '/auth/token').every((x) => x.userAgent === 'Anbar'), 'default User-Agent');
+  dk.userAgent = 'SellerApp/2';
+  const refused = await api.post('/api/digikala/import/preview');
+  assert.equal(refused.status, 400);
+  assert.match(refused.body.error, /Invalid User-Agent/);
+  assert.equal((await api.put('/api/digikala/settings', { user_agent: 'نامعتبر' })).status, 400, 'ASCII only');
+  assert.equal((await api.put('/api/digikala/settings', { user_agent: 'SellerApp/2' })).status, 200);
+  const r = await api.post('/api/digikala/import/preview');
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(dk.calls.at(-1).userAgent, 'SellerApp/2');
+  assert.equal((await api.get('/api/digikala')).body.status.user_agent, 'SellerApp/2');
+});
+
+test('import: every variant is read, matched by supplier code or name, and only confirmed ones become listings', async (t) => {
+  const env = await setup(t);
+  const { api, dk, ctx, product } = env;
+  const others = ctx.db.all('SELECT id FROM products WHERE id <> ? ORDER BY id LIMIT 2', product.id);
+  const named = (id, name, sku) => ctx.db.run('UPDATE products SET name = ?, sku = ?, search_text = ? WHERE id = ?', name, sku, name.toLowerCase(), id);
+  named(product.id, 'لیوان کاغذی ۲۲۰ سی‌سی بسته ۵۰ عددی', 'CUP-220');
+  named(others[0].id, 'دستمال کاغذی جیبی', 'TIS-1');
+  named(others[1].id, 'بشقاب یکبار مصرف گیاهی', null);
+  // The already linked variant 501 comes from connectAndList
+  await connectAndList(env, { variant: { price_list: 1000000, price_sale: 1000000 } });
+  dk.addVariant({ id: 601, title: 'بسته ۲۵ عددی', product_title: 'لیوان کاغذی ۲۲۰ سی سی', supplier_code: 'cup 220', price_list: 900000, price_sale: 880000 });
+  dk.addVariant({ id: 602, product_title: 'بشقاب گیاهی یکبار مصرف', price_list: 500000 });
+  dk.addVariant({ id: 603, product_title: 'هدفون بی‌سیم', price_list: 9000000 });
+  for (let i = 0; i < 60; i++) dk.addVariant({ id: 700 + i, product_title: `کالای آزمایشی ${i}`, price_list: 10000 });
+
+  const r = await api.post('/api/digikala/import/preview');
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.total, 64, 'all pages read');
+  assert.equal(r.body.already_linked, 1);
+  const by = Object.fromEntries(r.body.items.map((x) => [x.variant_id, x]));
+  assert.equal(by[501], undefined, 'linked variants are left out');
+  assert.equal(by[601].suggestions[0].product_id, product.id);
+  assert.equal(by[601].suggestions[0].why, 'sku', 'supplier code = SKU, spaces and case ignored');
+  assert.equal(by[601].units_guess, 25);
+  assert.equal(by[601].price_sale, 880000);
+  assert.equal(by[602].suggestions[0].product_id, others[1].id);
+  assert.equal(by[602].suggestions[0].why, 'name');
+  assert.deepEqual(by[603].suggestions, [], 'no guess when nothing is close');
+  assert.equal(r.body.items[0].variant_id, 601, 'best matches first');
+
+  const bad = await api.post('/api/digikala/import', { preview_id: 'nope-nope-nope', rows: [{ variant_id: 601, product_id: product.id, units: 25 }] });
+  assert.equal(bad.status, 409, 'an unknown preview is refused');
+  const res = await api.post('/api/digikala/import', { preview_id: r.body.preview_id, rows: [
+    { variant_id: 601, product_id: product.id, units: 25 },
+    { variant_id: 602, product_id: others[1].id, units: '۱' },
+    { variant_id: 999, product_id: product.id, units: 1 }
+  ] });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.created, 2);
+  assert.deepEqual(res.body.skipped.map((s) => s.variant_id), [999]);
+  const l = ctx.db.get("SELECT * FROM listings WHERE code = '601'");
+  assert.equal(l.product_id, product.id);
+  assert.equal(l.units, 25);
+  assert.equal(l.platform_price, 880000);
+  assert.equal(l.auto_price, 0, 'automatic pricing stays off until a formula is set');
+  assert.match(l.title, /لیوان کاغذی/);
+  assert.ok(ctx.db.get("SELECT 1 FROM audit_log WHERE entity = 'listing' AND entity_id = ? AND summary LIKE 'ورود آگهی دیجی‌کالا%'", String(l.id)), 'audited');
+
+  // Creating the same one twice does nothing; the next read leaves both out
+  const again = await api.post('/api/digikala/import', { preview_id: r.body.preview_id, rows: [{ variant_id: 601, product_id: product.id, units: 25 }] });
+  assert.equal(again.body.created, 0);
+  const next = await api.post('/api/digikala/import/preview');
+  assert.equal(next.body.already_linked, 3);
+});

@@ -16,9 +16,16 @@
  * the old number), opens a reference-price ticket and marks the listing blocked. An admin turns
  * it back on with one click once the reference price is approved.
  * Every result is written back in one transaction with its audit line.
+ *
+ * Import: reads every seller variant from Digikala, leaves out those that already have a listing,
+ * and suggests the site product of each (same supplier code as the product SKU, else the closest
+ * name). Nothing is linked by itself: a person confirms the product and the units of each sale,
+ * then the chosen listings are created together.
  */
-const { nowIso, badRequest, notFound, conflict } = require('./util');
-const { createDigikalaClient, decryptChallenge, checkPrivateKey, DigikalaError } = require('./digikala-api');
+const crypto = require('crypto');
+const { nowIso, badRequest, notFound, conflict, searchKey } = require('./util');
+const { createDigikalaClient, decryptChallenge, checkPrivateKey, DigikalaError, DEFAULT_USER_AGENT } = require('./digikala-api');
+const { guessUnits } = require('./sync');
 
 const MODES = { off: 'خاموش', dry_run: 'آزمایشی (چیزی فرستاده نمی‌شود)', live: 'فعال' };
 const SELF_TOKEN_DAYS = 180;
@@ -54,7 +61,7 @@ function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseM
         secrets.encrypt(access), refresh ? secrets.encrypt(refresh) : null, expiresAt || null, nowIso());
     }
   };
-  const client = () => createDigikalaClient({ baseUrl: conn().base_url, tokens, fetchImpl, retryBaseMs });
+  const client = () => { const c = conn(); return createDigikalaClient({ baseUrl: c.base_url, userAgent: c.user_agent, tokens, fetchImpl, retryBaseMs }); };
 
   /* ------------------------------------------------------------ connection (manager) */
   function status() {
@@ -64,7 +71,7 @@ function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseM
         SUM(CASE WHEN status = 'needs_approval' THEN 1 ELSE 0 END) AS approval,
         SUM(CASE WHEN status IN ('pending', 'approved') THEN 1 ELSE 0 END) AS queued FROM dk_jobs`);
     return {
-      mode: c.mode, mode_label: MODES[c.mode], base_url: c.base_url, client_code: c.client_code,
+      mode: c.mode, mode_label: MODES[c.mode], base_url: c.base_url, client_code: c.client_code, user_agent: c.user_agent, default_user_agent: DEFAULT_USER_AGENT,
       has_key: !!c.private_key_enc, connected: !!c.access_token_enc, connected_at: c.connected_at, self_token_expires_at: expires,
       self_token_days_left: expires ? Math.floor((new Date(expires).getTime() - Date.now()) / 864e5) : null,
       max_change_pct: c.max_change_pct, ticket_sub_category_id: c.ticket_sub_category_id, last_error: c.last_error, last_ok_at: c.last_ok_at,
@@ -104,19 +111,20 @@ function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseM
     return status();
   }
 
-  function setSettings(actor, { mode, max_change_pct: maxChange, ticket_sub_category_id: ticketSub, base_url: baseUrl }) {
+  function setSettings(actor, { mode, max_change_pct: maxChange, ticket_sub_category_id: ticketSub, base_url: baseUrl, user_agent: userAgent }) {
     const before = conn();
     const after = {
       mode: mode ?? before.mode, max_change_pct: maxChange ?? before.max_change_pct,
-      ticket_sub_category_id: ticketSub === undefined ? before.ticket_sub_category_id : ticketSub, base_url: baseUrl || before.base_url
+      ticket_sub_category_id: ticketSub === undefined ? before.ticket_sub_category_id : ticketSub, base_url: baseUrl || before.base_url,
+      user_agent: userAgent === undefined ? before.user_agent : userAgent || null
     };
     if (!MODES[after.mode]) throw badRequest('حالت معتبر نیست.', { mode: 'معتبر نیست' });
     if (after.mode === 'live' && !before.access_token_enc) throw badRequest('برای حالت «فعال» اول به دیجی‌کالا وصل شوید.', { mode: 'وصل نیست' });
     db.tx(() => {
-      db.run('UPDATE dk_connection SET mode = ?, max_change_pct = ?, ticket_sub_category_id = ?, base_url = ?, updated_at = ? WHERE id = 1',
-        after.mode, after.max_change_pct, after.ticket_sub_category_id, after.base_url, nowIso());
+      db.run('UPDATE dk_connection SET mode = ?, max_change_pct = ?, ticket_sub_category_id = ?, base_url = ?, user_agent = ?, updated_at = ? WHERE id = 1',
+        after.mode, after.max_change_pct, after.ticket_sub_category_id, after.base_url, after.user_agent, nowIso());
       const changes = audit.diff({ ...before, mode: MODES[before.mode] }, { ...after, mode: MODES[after.mode] },
-        { mode: 'حالت قیمت‌گذاری خودکار', max_change_pct: 'سقف تغییر خودکار (٪)', ticket_sub_category_id: 'زیردسته‌ی تیکت قیمت مرجع', base_url: 'آدرس API' });
+        { mode: 'حالت قیمت‌گذاری خودکار', max_change_pct: 'سقف تغییر خودکار (٪)', ticket_sub_category_id: 'زیردسته‌ی تیکت قیمت مرجع', base_url: 'آدرس API', user_agent: 'User-Agent' });
       if (changes.length) audit(actor, { action: 'update', entity: 'settings', id: null, summary: 'تنظیمات قیمت‌گذاری خودکار دیجی‌کالا', changes });
       events.emit('digikala', {});
     });
@@ -358,10 +366,130 @@ function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseM
                                 FROM listings l JOIN products p ON p.id = l.product_id JOIN companies c ON c.id = p.company_id
                                 WHERE l.dk_state = 'blocked' ORDER BY l.updated_at DESC`);
 
+  /* ------------------------------------------------------------ import of listings */
+  const previews = new Map(); // id → { at, variants: Map(variant id → variant) }
+  const PREVIEW_TTL = 60 * 60e3;
+
+  /** Reads every seller variant (network, outside any transaction) and suggests a site product for each. */
+  async function importPreview({ maxPages = 200, size = 50 } = {}) {
+    const c = conn();
+    if (!c.access_token_enc) throw badRequest('اول از صفحه‌ی «قیمت دیجی‌کالا» به دیجی‌کالا وصل شوید.');
+    const api = client();
+    const all = [];
+    let pages = 1;
+    try {
+      for (let page = 1; page <= Math.min(pages, maxPages); page++) {
+        const d = await api.variants({ page, size });
+        const items = (d && d.items) || [];
+        all.push(...items);
+        pages = Number(d && d.pager && d.pager.total_pages) || (items.length < size ? page : page + 1);
+        if (!items.length) break;
+      }
+    } catch (err) {
+      db.tx(() => db.run('UPDATE dk_connection SET last_error = ?, updated_at = ? WHERE id = 1', err.message, nowIso()));
+      throw badRequest(`خواندن تنوع‌ها از دیجی‌کالا نشد: ${err.message}`);
+    }
+    db.tx(() => db.run('UPDATE dk_connection SET last_ok_at = ?, last_error = NULL WHERE id = 1', nowIso()));
+
+    const linked = new Set(db.all('SELECT code FROM listings WHERE platform_id = ?', platformId()).map((l) => variantIdOf(l.code)).filter(Boolean));
+    const fresh = all.map(variantView).filter((v) => v.variant_id && !linked.has(v.variant_id));
+    const match = createMatcher(db.all(`SELECT p.id, p.name, p.sku, p.units_per_pack, p.regular_price, p.company_id, c.name AS company_name, c.currency
+                                        FROM products p JOIN companies c ON c.id = p.company_id WHERE p.removed_at IS NULL AND c.active = 1`));
+    const items = fresh.map((v) => ({ ...v, suggestions: match(v) }));
+    items.sort((a, b) => ((b.suggestions[0] || {}).score || 0) - ((a.suggestions[0] || {}).score || 0));
+
+    for (const [k, p] of previews) if (Date.now() - p.at > PREVIEW_TTL) previews.delete(k);
+    const id = crypto.randomBytes(12).toString('base64url');
+    previews.set(id, { at: Date.now(), variants: new Map(fresh.map((v) => [v.variant_id, v])) });
+    return { preview_id: id, total: all.length, already_linked: all.length - fresh.length, items };
+  }
+
+  /** Creates the confirmed listings together: [{ variant_id, product_id, units }]. */
+  function importCreate(actor, previewId, rows) {
+    const p = previews.get(previewId);
+    if (!p || Date.now() - p.at > PREVIEW_TTL) throw conflict('فهرست خوانده‌شده کهنه است؛ دوباره «خواندن از دیجی‌کالا» را بزنید.');
+    const pid = platformId();
+    const created = [];
+    const skipped = [];
+    db.tx(() => {
+      for (const r of rows) {
+        const v = p.variants.get(Number(r.variant_id));
+        if (!v) { skipped.push({ variant_id: r.variant_id, reason: 'در فهرست خوانده‌شده نیست' }); continue; }
+        const product = db.get('SELECT * FROM products WHERE id = ? AND removed_at IS NULL', Number(r.product_id));
+        if (!product) { skipped.push({ variant_id: v.variant_id, reason: 'کالای سایت پیدا نشد' }); continue; }
+        const code = String(v.variant_id);
+        if (db.get('SELECT 1 FROM listings WHERE platform_id = ? AND code = ?', pid, code)) { skipped.push({ variant_id: v.variant_id, reason: 'آگهی دارد' }); continue; }
+        const now = nowIso();
+        const title = v.title.slice(0, 300);
+        const id = Number(db.run(`INSERT INTO listings (platform_id, product_id, code, title, units, platform_price, note, search_text, created_at, updated_at)
+                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        pid, product.id, code, title, r.units, v.price_sale, v.supplier_code ? `کد تأمین‌کننده: ${v.supplier_code}` : null,
+        searchKey([code, title, product.name, product.sku].filter(Boolean).join(' ')), now, now).lastInsertRowid);
+        audit(actor, { action: 'create', entity: 'listing', id, summary: `ورود آگهی دیجی‌کالا ${code} برای «${product.name}» — هر فروش ${r.units} عدد از ${product.units_per_pack}` });
+        created.push({ id, variant: v.variant_id });
+      }
+      if (created.length) events.emit('listings', { ids: created.map((x) => x.id) });
+    });
+    for (const x of created) p.variants.delete(x.variant);
+    return { created: created.length, skipped };
+  }
+
   return {
     status, setKey, connect, setSettings, enqueue, onChanges, handles, kick, processDue, approve, reject, reactivate, reprice, jobs, blocked,
-    priceFor, variantIdOf, MODES
+    importPreview, importCreate, priceFor, variantIdOf, MODES
   };
 }
 
-module.exports = { createDigikala, priceFor, variantIdOf, MODES };
+/** A seller variant as the import page shows it (prices in rials). */
+function variantView(v) {
+  const product = String(v.product_title || '').trim();
+  const own = String(v.title || '').trim();
+  const title = own && product && !own.includes(product) ? `${product} — ${own}` : own || product;
+  const extra = v.sku_config ? [v.sku_config.color, v.sku_config.size].filter((x) => typeof x === 'string' && x).join(' ') : '';
+  return {
+    variant_id: Number(v.id || v.product_variant_id) || null, product_id: v.product_id ?? null, title: title || `تنوع ${v.id}`, extra,
+    supplier_code: v.supplier_code ? String(v.supplier_code).trim() : null, price_sale: v.price_sale ?? null, price_list: v.price_list ?? null,
+    active: v.active !== false, stock: v.marketplace_seller_stock ?? null, image_src: v.image_src || null, product_url: v.product_url || null,
+    units_guess: guessUnits(`${title} ${extra}`)
+  };
+}
+
+const STOP = new Set(['مدل', 'بسته', 'عددی', 'عدد', 'تایی', 'و', 'با', 'برای', 'از', 'به', 'در', 'کد', 'رنگ', 'سایز', 'طرح', 'مناسب', 'مجموعه', 'یک', 'دو', 'سه']);
+const words = (s) => searchKey(s).split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1 && !STOP.has(w));
+const codeKey = (s) => searchKey(s).replace(/[\s\-_./]/g, '');
+
+/**
+ * Suggests site products for a Digikala variant: the same supplier code as a product's SKU first
+ * (score 1), then names sharing the most words (Dice coefficient). At most three, best first.
+ */
+function createMatcher(products) {
+  const bySku = new Map();
+  const index = new Map();
+  const toks = new Map();
+  for (const p of products) {
+    if (p.sku) {
+      const k = codeKey(p.sku);
+      if (k) bySku.set(k, [...(bySku.get(k) || []), p]);
+    }
+    const w = new Set(words(p.name));
+    toks.set(p.id, w);
+    for (const t of w) index.set(t, [...(index.get(t) || []), p]);
+  }
+  const view = (p, score, why) => ({
+    product_id: p.id, name: p.name, sku: p.sku, company_id: p.company_id, company_name: p.company_name, currency: p.currency,
+    units_per_pack: p.units_per_pack, regular_price: p.regular_price, score: Math.round(score * 100) / 100, why
+  });
+  return (v) => {
+    const out = new Map();
+    if (v.supplier_code) for (const p of bySku.get(codeKey(v.supplier_code)) || []) out.set(p.id, view(p, 1, 'sku'));
+    const mine = new Set(words(`${v.title} ${v.extra || ''}`));
+    const shared = new Map();
+    for (const t of mine) for (const p of index.get(t) || []) shared.set(p, (shared.get(p) || 0) + 1);
+    const byName = [...shared].map(([p, n]) => [p, (2 * n) / (mine.size + toks.get(p.id).size)])
+      .filter(([, s]) => s >= 0.25).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    for (const [p, s] of byName) if (!out.has(p.id)) out.set(p.id, view(p, s, 'name'));
+    return [...out.values()].slice(0, 3);
+  };
+}
+
+module.exports = { createDigikala, priceFor, variantIdOf, createMatcher, variantView, MODES };

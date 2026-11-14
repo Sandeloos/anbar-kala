@@ -6,7 +6,8 @@
  *  - access tokens expire (refreshTokens rotate);
  *  - a selling price more than `band` (default 20 %) away from the variant's reference price
  *    (price_list) is refused with errors.selling_price;
- *  - optional rate limit (429 with reset_time).
+ *  - optional rate limit (429 with reset_time);
+ *  - optional `userAgent`: authenticated calls with any other User-Agent get 401 "Invalid User-Agent!".
  *
  *   const dk = await createMockDigikala({ publicKey }).listen(0);
  *   dk.challenge()  → base64 code to paste in the settings page;  dk.variants, dk.tickets, dk.calls
@@ -14,7 +15,7 @@
 const http = require('http');
 const crypto = require('crypto');
 
-function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3 } = {}) {
+function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3, userAgent = null } = {}) {
   const variants = new Map();
   const tickets = [];
   const calls = [];
@@ -39,7 +40,7 @@ function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3
   function handle(req, res, body) {
     const url = new URL(req.url, 'http://x');
     const path = url.pathname.replace(/^\/open-api\/v1/, '');
-    calls.push({ method: req.method, path, body });
+    calls.push({ method: req.method, path, body, userAgent: req.headers['user-agent'] || null });
     if (failNext.length) {
       const f = failNext.shift();
       if (f === 429) return send(res, 429, { status: 'error', message: 'rate limit', reset_time: 1 }, { 'retry-after': '0' });
@@ -59,8 +60,16 @@ function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3
     const token = String(req.headers.authorization || '').replace(/^Bearer /, '');
     const exp = access.get(token);
     if (!exp || exp < Date.now()) return err(res, 401, 'Your access is denied. Please get a new access_token.!');
+    if (api.userAgent && req.headers['user-agent'] !== api.userAgent) return err(res, 401, 'Invalid User-Agent!');
 
     let m;
+    if (req.method === 'GET' && path === '/variants') {
+      const size = Math.min(100, Number(url.searchParams.get('size')) || 50);
+      const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
+      const all = [...variants.values()].sort((a, b) => a.id - b.id);
+      return ok(res, { sort_data: {}, pager: { page, item_per_page: size, total_pages: Math.max(1, Math.ceil(all.length / size)), total_rows: all.length },
+        form_data: [], items: all.slice((page - 1) * size, page * size).map((v) => ({ ...v, product_variant_id: v.id })) });
+    }
     if (req.method === 'GET' && (m = /^\/variants\/(\d+)$/.exec(path))) {
       const v = variants.get(Number(m[1]));
       return v ? ok(res, { ...v }) : err(res, 404, 'Data is not exist for your request.');
@@ -101,11 +110,12 @@ function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3
   }
 
   const api = {
-    variants, tickets, calls,
+    variants, tickets, calls, userAgent,
     get url() { return base; },
     /** Adds a seller variant (prices in rials). */
     addVariant(v) {
-      const full = { id: v.id, product_id: v.product_id || v.id + 100000, title: v.title || `تنوع ${v.id}`, active: true, price_list: v.price_list, price_sale: v.price_sale ?? v.price_list,
+      const full = { id: v.id, product_id: v.product_id || v.id + 100000, title: v.title || (v.product_title ? '' : `تنوع ${v.id}`), product_title: v.product_title || '', supplier_code: v.supplier_code || '',
+        active: true, price_list: v.price_list, price_sale: v.price_sale ?? v.price_list,
         credit_increase_percentage: v.credit_increase_percentage ?? 0, marketplace_seller_stock: v.marketplace_seller_stock ?? 10, product_url: `https://www.digikala.com/product/dkp-${v.product_id || v.id}/` };
       variants.set(v.id, full);
       return full;

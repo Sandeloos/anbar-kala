@@ -47,6 +47,7 @@ decision taken with them: `docs/decisions.md` (Persian) — read it before chang
   one writer module (`tests/unit/architecture.test.js`). Sync writes pass `fetchedAt` (time the request was sent).
 - Digikala: only `lib/digikala.js` writes `dk_jobs`/`dk_connection`; network calls never inside `db.tx` (queue first,
   worker after commit). Test against `tools/mock-digikala.js`, never the real API. ADR 0007.
+  Import of listings: `importPreview` / `importCreate` in the same module, view `views/digikala-import.js`.
 - Technical decisions: `docs/adr/`. Operations: `/health`, `/ready`, `/metrics` (METRICS_TOKEN), request ids,
   graceful `app.shutdown()`; config is validated in `config.js` (add new variables to its zod schema).
 

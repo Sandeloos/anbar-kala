@@ -66,7 +66,7 @@ test('two people edit the same record: the later save is refused and nothing is 
 test('phase 4 pages: no serious accessibility problems, no sideways scroll', async ({ page }) => {
   const AxeBuilder = require('@axe-core/playwright').default;
   await signIn(page);
-  for (const route of ['inbox', 'inbox?status=closed', 'settings', 'dashboard', 'digikala']) {
+  for (const route of ['inbox', 'inbox?status=closed', 'settings', 'dashboard', 'digikala', 'digikala/import']) {
     await page.goto(`/#/${route}`);
     await expect(page.locator('#view')).toHaveAttribute('aria-busy', 'false');
     await page.waitForTimeout(300);

@@ -96,6 +96,12 @@ async function seedDigikala(app) {
       dk.addVariant({ id: digikala.variantIdOf(r.code), price_list: i < 2 ? Math.round(f.price / 3) : f.price, price_sale: f.price - 10000, credit_increase_percentage: 10, marketplace_seller_stock: 5 + i });
     });
   });
+  // Variants that have no listing yet, for "import from Digikala": half share the SKU, half only a similar name
+  const loose = db.all(`SELECT p.id, p.name, p.sku, p.regular_price FROM products p WHERE p.removed_at IS NULL
+                        AND p.id NOT IN (SELECT product_id FROM listings WHERE platform_id = 1) ORDER BY p.id LIMIT 12`);
+  loose.forEach((p, i) => dk.addVariant({ id: 880000 + i, product_title: i % 2 ? `${p.name} اصل` : p.name, supplier_code: i % 2 ? '' : p.sku || '',
+    price_list: Math.round((p.regular_price || 100000) * 1.3), marketplace_seller_stock: 3 }));
+  dk.addVariant({ id: 889999, product_title: 'هدفون بی‌سیم (کالای خودمان)', price_list: 25000000 });
   digikala.setSettings(as, { mode: 'live' });
   for (const r of rows.slice(0, 4)) digikala.reprice(as, r.id);
   await digikala.kick();
