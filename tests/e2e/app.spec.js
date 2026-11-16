@@ -105,15 +105,23 @@ test('a new admin signs in with a one-time password and must choose their own', 
   await page.goto('/#/users');
   await page.getByRole('button', { name: 'کاربر جدید' }).click();
   await page.fill('#u-name', 'سارا محمدی');
-  await page.fill('#u-username', 'sara');
+  // A new name on every attempt, so a retry does not collide with the user the first attempt made
+  const username = `sara-${Date.now().toString(36)}`;
+  await page.fill('#u-username', username);
   await page.getByRole('button', { name: 'ساخت کاربر و رمز موقت' }).click();
   const temp = (await page.locator('.secret code').textContent()).trim();
   expect(temp).toHaveLength(10);
   await page.getByRole('button', { name: 'بستم' }).click();
   await page.locator('.side-foot [data-logout]').click();
   await page.locator('#confirm-yes').click();
-  await signInRaw(page, 'sara', temp);
-  await expect(page.locator('#first-password')).toBeVisible();
+  // Check the sign-in answer itself, so a failure says whether signing in or the screen switch went wrong
+  const login = page.waitForResponse((r) => r.url().endsWith('/api/auth/login'));
+  await signInRaw(page, username, temp);
+  const res = await login;
+  expect(res.status(), await res.text()).toBe(200);
+  expect((await res.json()).user.must_change_password).toBe(true);
+  // A busy CI server may still be finishing the previous test's site sync
+  await expect(page.locator('#first-password')).toBeVisible({ timeout: 15000 });
   await page.fill('#fp-current', temp);
   await page.fill('#fp-next', 'Tehran-Blue-77');
   await page.fill('#fp-repeat', 'Tehran-Blue-78');
