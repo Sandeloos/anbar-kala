@@ -93,8 +93,15 @@ export async function render(view, ctx) {
       const base = Math.round((product.regular_price * units) / product.units_per_pack);
       const step = Math.max(1, num(form.elements.round_to.value) * 10 || 10000);
       const price = Math.ceil(Math.round(base * (1 + margin / 100) + num(form.elements.fixed_add.value) * 10) / step) * step;
-      out.textContent = `قیمت سایت برای ${fa(units)} عدد: ${moneyText(base, 'toman')}؛ قیمت دیجی‌کالا با این فرمول: ${moneyText(price, 'toman')}`;
+      const off = form.elements.auto_price.checked ? '' : ' — قیمت‌گذاری خودکار این آگهی خاموش است؛ این قیمت فرستاده نمی‌شود.';
+      out.textContent = `قیمت سایت برای ${fa(units)} عدد: ${moneyText(base, 'toman')}؛ قیمت دیجی‌کالا با این فرمول: ${moneyText(price, 'toman')}${off}`;
     };
+    // Typing a margin into an empty formula means "price this listing": the switch is turned on with it
+    // (it can still be turned off). An imported listing starts with the switch off.
+    const hadMargin = form.elements.margin_pct.value.trim() !== '';
+    form.elements.margin_pct.addEventListener('input', () => {
+      if (!hadMargin && form.elements.margin_pct.value.trim() !== '') form.elements.auto_price.checked = true;
+    });
     form.addEventListener('input', preview);
     form.elements.platform_id.addEventListener('change', preview);
     const hint = () => { $('#li-units-hint', body).textContent = product ? `بسته‌ی کامل این کالا ${product.units_per_pack} عدد است.` : ''; };

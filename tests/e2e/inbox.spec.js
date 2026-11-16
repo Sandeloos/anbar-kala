@@ -77,3 +77,30 @@ test('phase 4 pages: no serious accessibility problems, no sideways scroll', asy
     expect(serious.map((v) => `${route} ${v.id}: ${v.nodes.map((n) => n.target).join(' ')}`)).toEqual([]);
   }
 });
+
+test('listing form: typing a margin into an empty Digikala formula turns automatic pricing on', async ({ page }, testInfo) => {
+  laptopOnly(testInfo);
+  await signIn(page);
+  const pick = await (await page.request.get(`/api/pick?q=${encodeURIComponent('جعبه')}&products_only=1`)).json();
+  const it = pick.items.find((x) => x.company_name === 'شرکت آزمایشی');
+  // Like a listing imported from the seller's variants: no formula, switch off
+  const li = await page.request.post('/api/listings', { headers: H, data: { platform_id: 1, product_id: it.product_id, code: 'DKPC-77001', units: 1 } });
+  expect(li.status(), await li.text()).toBe(200);
+  await page.goto('/#/listings');
+  await page.fill('#l-q', 'DKPC-77001');
+  const row = page.locator('tr', { hasText: 'DKPC-77001' });
+  await row.getByRole('button', { name: 'ویرایش' }).click();
+  const auto = page.locator('#f-li input[name=auto_price]');
+  await expect(auto).not.toBeChecked();
+  await page.fill('#li-margin', '۲۵');
+  await expect(auto).toBeChecked();
+  await expect(page.locator('#li-dk-preview')).not.toContainText('خاموش');
+  await auto.uncheck({ force: true });
+  await expect(page.locator('#li-dk-preview')).toContainText('خاموش است');
+  await auto.check({ force: true });
+  await page.click('#f-li button[type=submit]');
+  await expect(page.locator('#f-li')).toHaveCount(0);
+  const saved = (await (await page.request.get(`/api/listings?q=DKPC-77001`)).json()).items[0];
+  expect(saved.auto_price).toBe(1);
+  expect(saved.margin_pct).toBe(25);
+});
