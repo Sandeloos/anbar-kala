@@ -3,9 +3,29 @@
 const { dayStart, tehranDay, monthOf, monthLabel } = require('../lib/jalali');
 
 module.exports = async function dashboardRoutes(app) {
-  const { db, sync, statements } = app.ctx;
+  const { db, sync, statements, integrity, backups } = app.ctx;
 
-  app.get('/dashboard', async () => {
+  /**
+   * For the manager: what the nightly jobs found, so a failed integrity check or stopped
+   * backups are seen on the dashboard instead of only in the server log.
+   * Backups are "late" after 36 hours (one night missed), or when none exists although the
+   * data is older than that (a new installation gets its first one the next night).
+   */
+  const BACKUP_LATE_MS = 36 * 3600e3;
+  function system() {
+    const report = integrity.last();
+    const latest = backups.list()[0] || null;
+    const oldest = db.get('SELECT MIN(created_at) AS t FROM companies').t;
+    const late = latest
+      ? Date.now() - new Date(latest.at).getTime() > BACKUP_LATE_MS
+      : !!oldest && Date.now() - new Date(oldest).getTime() > BACKUP_LATE_MS;
+    return {
+      integrity: report ? { ok: report.ok, at: report.at, failed: report.results.filter((r) => !r.ok).map((r) => r.label) } : null,
+      backup: { last_at: latest ? latest.at : null, late }
+    };
+  }
+
+  app.get('/dashboard', async (req) => {
     const day = new Date(Date.now() - 864e5).toISOString();
     const p = db.get(`SELECT COUNT(*) AS total,
         SUM(CASE WHEN stock_status = 'outofstock' THEN 1 ELSE 0 END) AS out_of_stock,
@@ -58,6 +78,7 @@ module.exports = async function dashboardRoutes(app) {
       .map((c) => ({ ...c, month, month_label: monthLabel(month), total: statements.totals(c.id, month).total }));
     return {
       ops, days, accounts,
+      system: req.user.role === 'manager' ? system() : null,
       products: {
         total: p.total || 0, out_of_stock: p.out_of_stock || 0, needs_setup: p.needs_setup || 0,
         multi_packs: p.multi_packs || 0, manual_prices: p.manual_prices || 0

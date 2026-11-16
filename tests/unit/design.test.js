@@ -236,3 +236,34 @@ test('sync: a site that suddenly lists nothing does not mark every product remov
   assert.equal(run.removed, 1);
 });
 
+test('dashboard: a manager sees when the nightly integrity check failed or backups stopped; an admin does not', async (t) => {
+  const { ctx, api, c } = await signedIn(t);
+  let d = (await api.get('/api/dashboard')).body;
+  assert.equal(d.system.integrity, null, 'never ran');
+  assert.equal(d.system.backup.late, false, 'a new installation is not late');
+
+  const old = new Date(Date.now() - 3 * 864e5).toISOString();
+  ctx.db.run(`INSERT INTO companies (name, site_url, currency, price_unit, webhook_secret, created_at, updated_at) VALUES ('قدیمی', 'https://old.example', 'toman', 'toman', 's', ?, ?)`, old, old);
+  assert.equal((await api.get('/api/dashboard')).body.system.backup.late, true, 'data three days old and no backup');
+  c.backups.now(3);
+  assert.equal((await api.get('/api/dashboard')).body.system.backup.late, false);
+
+  assert.equal(c.integrity.run().ok, true);
+  assert.equal((await api.get('/api/dashboard')).body.system.integrity.ok, true);
+  const comp = ctx.db.get("SELECT id FROM companies WHERE name = 'قدیمی'").id;
+  ctx.db.maintenance(() => {
+    const p = Number(ctx.db.run(`INSERT INTO products (company_id, woo_id, type, name, created_at, updated_at) VALUES (?, 5, 'simple', 'ک', ?, ?)`, comp, old, old).lastInsertRowid);
+    ctx.db.run(`INSERT INTO stock_moves (product_id, warehouse_id, owner_company_id, units, kind, created_at) VALUES (?, 1, NULL, -2, 'adjust', ?)`, p, old);
+  });
+  ctx.checkIntegrity = false; // broken on purpose
+  c.integrity.run();
+  d = (await api.get('/api/dashboard')).body;
+  assert.equal(d.system.integrity.ok, false);
+  assert.ok(d.system.integrity.failed.includes('موجودی منفی'));
+
+  await addUser(ctx.db, { username: 'staff', password: 'staff-pass-12', role: 'admin', name: 'کارمند' });
+  const admin = client(ctx.app);
+  await admin.login('staff', 'staff-pass-12');
+  assert.equal((await admin.get('/api/dashboard')).body.system, null);
+});
+
