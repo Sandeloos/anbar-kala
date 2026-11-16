@@ -23,6 +23,17 @@ const { nowIso, badRequest, notFound, conflict, HttpError } = require('./util');
 /** An order up to this long before we first read a product still takes that first price (marked uncertain). */
 const FIRST_SEEN_GRACE_MS = 15 * 60e3;
 
+/**
+ * What an order line is worth to its company, in SQL over an order_lines alias — the same money the
+ * monthly statement pays: a waiting line its expected amount; a received line what the company
+ * shipped itself (key L) plus what went out of its surplus in our warehouse (key M). Cancelled
+ * units and units sent from our own stock are worth nothing to the company.
+ */
+const companyAmountSql = (x) => `(CASE WHEN ${x}.status = 'pending' THEN ${x}.qty * ${x}.settle_unit_price
+  ELSE CAST(ROUND(${x}.units_from_company * ${x}.settle_unit_price * 1.0 / ${x}.units_per_sale) AS INTEGER)
+    + COALESCE((SELECT SUM(m.value) FROM stock_moves m WHERE m.order_line_id = ${x}.id AND m.kind = 'ship_out'
+                AND m.owner_company_id IS NOT NULL AND m.reversed_by IS NULL AND m.reverses IS NULL), 0) END)`;
+
 const OUTCOME_LABEL = { ok: 'درست رسید', excess: 'اضافه رسید', short: 'کم رسید / نرسید', wrong: 'اشتباه رسید', cancelled: 'لغو شد' };
 
 function createOrders({ db, sync, events, audit, stock }) {
@@ -168,7 +179,7 @@ function createOrders({ db, sync, events, audit, stock }) {
     const o = db.get(`SELECT o.*, pl.name AS platform_name, pl.code AS platform_code, u.name AS created_by_name FROM orders o
                       JOIN platforms pl ON pl.id = o.platform_id LEFT JOIN users u ON u.id = o.created_by WHERE o.id = ?`, Number(id));
     if (!o) throw notFound('سفارش پیدا نشد.');
-    const lines = db.all(`SELECT l.*, p.name AS product_name, p.permalink, p.attributes, c.name AS company_name, c.currency,
+    const lines = db.all(`SELECT l.*, ${companyAmountSql('l')} AS company_amount, p.name AS product_name, p.permalink, p.attributes, c.name AS company_name, c.currency,
                             li.title AS listing_title, li.code AS listing_code, ru.name AS received_by_name
                           FROM order_lines l JOIN products p ON p.id = l.product_id JOIN companies c ON c.id = l.company_id
                           LEFT JOIN listings li ON li.id = l.listing_id LEFT JOIN users ru ON ru.id = l.received_by
@@ -444,4 +455,4 @@ function createOrders({ db, sync, events, audit, stock }) {
   };
 }
 
-module.exports = { createOrders, OUTCOME_LABEL };
+module.exports = { createOrders, companyAmountSql, OUTCOME_LABEL };

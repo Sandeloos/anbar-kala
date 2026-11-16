@@ -377,7 +377,7 @@ async function renderOne(view, ctx, id) {
     const byCompany = new Map();
     for (const l of d.lines) {
       const k = `${l.company_name}|${l.currency}`;
-      byCompany.set(k, (byCompany.get(k) || 0) + l.qty * l.settle_unit_price);
+      byCompany.set(k, (byCompany.get(k) || 0) + l.company_amount);
     }
     view.innerHTML = `
       <div><a class="back" href="#/orders">${icon('back')}سفارش‌ها</a>
@@ -400,7 +400,7 @@ async function renderOne(view, ctx, id) {
             <td class="col-num" data-label="قیمت سایت"><span class="price">${money(l.site_price, l.currency)}</span>
               <div class="small muted">${l.site_price_source === 'manual' ? '<span class="badge badge-orange">دستی</span>' : `${esc(smartTime(l.site_price_at))} ${sourceBadge(l.site_price_source)}`}${l.units_per_sale !== l.units_per_pack ? ` · ${fa(l.units_per_sale)} از ${fa(l.units_per_pack)}` : ''}</div>
               ${l.price_uncertain ? '<div class="small" style="color:var(--amber)">نامطمئن: سایت بعد از زمان سفارش بررسی نشده بود</div>' : ''}</td>
-            <td class="col-num" data-label="مبلغ برای شرکت"><span class="price">${money(l.qty * l.settle_unit_price, l.currency)}</span>
+            <td class="col-num" data-label="مبلغ برای شرکت"><span class="price">${money(l.company_amount, l.currency)}</span>
               ${l.settle_manual ? `<div class="small"><span class="badge badge-orange">دستی</span> ${esc(l.settle_reason || '')}</div>` : ''}</td>
             <td data-label="دریافت">${lineStatus(l)}${receiveDetails(l)}</td>
             <td class="col-actions"><button class="btn btn-sm" type="button" data-price="${l.id}">${icon('edit')}قیمت</button>
