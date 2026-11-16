@@ -103,6 +103,23 @@ test('dry run: what would be sent is recorded, nothing changes on Digikala; the 
   assert.equal(ctx.db.get("SELECT COUNT(*) AS n FROM tasks WHERE kind = 'price'").n, 0, 'no manual price task: the robot handles it');
 });
 
+test('formulas saved while the robot was off are priced when it is switched on, and again from dry run to live', async (t) => {
+  const env = await setup(t);
+  const { api, dk, c, product } = env;
+  const target = formulaPrice(product);
+  // Set up exactly like the owner did: formula first, robot still off, no site price change after
+  await connectAndList(env, { variant: { price_list: target, price_sale: target - 10000 } });
+  assert.equal(c.digikala.jobs().length, 0, 'off: nothing queued');
+  await api.put('/api/digikala/settings', { mode: 'dry_run' });
+  await c.digikala.kick();
+  assert.equal(c.digikala.jobs()[0].status, 'dry_run', 'checked once when switched on');
+  assert.equal(dk.variants.get(501).price_sale, target - 10000);
+  await api.put('/api/digikala/settings', { mode: 'live' });
+  await c.digikala.kick();
+  assert.equal(dk.variants.get(501).price_sale, target, 'sent when switched from dry run to live');
+  assert.equal(c.digikala.jobs()[0].status, 'sent');
+});
+
 test('live: the price is sent with the panel\'s own credit percentage; a change above 30 % waits for approval', async (t) => {
   const env = await setup(t);
   const { api, dk, c, product, sitePrice, ctx } = env;

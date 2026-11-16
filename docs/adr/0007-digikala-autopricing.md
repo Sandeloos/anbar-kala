@@ -26,7 +26,9 @@ public key, the panel shows an authorization code encrypted with it (base64, PKC
   retried with back-off. An admin re-activates with one click (variant on, stock back, priced again).
 - **Secrets:** private key and tokens AES-GCM encrypted (`APP_SECRET`); the refresh token is replaced on every
   refresh; 401 → one refresh and retry. The self-token's 6-month expiry is shown, red under 21 days.
-- **Modes:** off / dry run / live. Start in dry run.
+- **Modes:** off / dry run / live. Start in dry run. Switching the mode on (or dry run → live) queues every
+  auto-priced listing once, so formulas saved while it was off are priced without waiting for a site change.
+  A job refreshed while the worker is talking to Digikala keeps the real result; the newer request is queued again.
 - **Tests:** `tools/mock-digikala.js` implements the used endpoints with a reference-price band, token expiry,
   rotating refresh tokens and rate limits; `tests/unit/digikala.test.js` covers every path. The demo runs it on 8094.
 
