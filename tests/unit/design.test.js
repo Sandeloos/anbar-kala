@@ -236,3 +236,34 @@ test('sync: a site that suddenly lists nothing does not mark every product remov
   assert.equal(run.removed, 1);
 });
 
+test('dates typed by hand: a return not before shipping or in the future; a payment not before issue or in the future', async (t) => {
+  const { ctx, api } = await signedIn(t);
+  const s = await shop(ctx, { count: 2, seed: 29, variableRatio: 0 });
+  const comp = await addCompany(ctx, api, s);
+  const p = ctx.db.get("SELECT * FROM products WHERE company_id = ? AND type = 'simple' ORDER BY id LIMIT 1", comp.id);
+  const o = await api.post('/api/orders', { platform_id: 1, order_number: 'R-1', ordered_at: new Date().toISOString(), lines: [{ product_id: p.id, qty: 1 }] });
+  assert.equal(o.status, 200, JSON.stringify(o.body));
+  const line = o.body.lines[0];
+  assert.equal((await api.post(`/api/order-lines/${line.id}/receive`, { outcome: 'ok' })).status, 200);
+  const future = new Date(Date.now() + 2 * 864e5).toISOString();
+  const before = new Date(Date.now() - 864e5).toISOString();
+  const f = await api.post(`/api/order-lines/${line.id}/returns`, { units: 1, returned_at: future });
+  assert.equal(f.status, 400);
+  assert.equal(f.body.fields.returned_at, 'در آینده است.');
+  const b = await api.post(`/api/order-lines/${line.id}/returns`, { units: 1, returned_at: before });
+  assert.equal(b.status, 400);
+  assert.equal(b.body.fields.returned_at, 'قبل از ارسال است.');
+  // Today's date without a time (Tehran midnight) on the shipping day is fine
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tehran' }).format(new Date());
+  const r = await api.post(`/api/order-lines/${line.id}/returns`, { units: 1, returned_at: today });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+
+  const now = new Date().toISOString();
+  ctx.db.run("INSERT INTO statements (company_id, month, status, currency, issued_at) VALUES (?, '1404-02', 'issued', 'toman', ?)", comp.id, now);
+  const sid = ctx.db.get("SELECT id FROM statements WHERE company_id = ? AND month = '1404-02'", comp.id).id;
+  assert.equal((await api.post(`/api/statements/${sid}/paid`, { paid_at: future })).body.fields.paid_at, 'در آینده است.');
+  assert.equal((await api.post(`/api/statements/${sid}/paid`, { paid_at: before })).body.fields.paid_at, 'قبل از صدور است.');
+  assert.equal(ctx.db.get('SELECT status FROM statements WHERE id = ?', sid).status, 'issued');
+  assert.equal((await api.post(`/api/statements/${sid}/paid`, { paid_at: today })).status, 200, 'paid on the day of issue');
+});
+
