@@ -5,6 +5,7 @@
  *
  *   auth/token          { authorization_code }               → access + refresh token
  *   auth/refresh-token  { access_token, refresh_token }      → new pair (always keep the new refresh token)
+ *   GET   variants?page&size                                  → { pager, items } (the seller's variants)
  *   GET   variants/{id}                                       → price_sale, price_list (reference), stock, …
  *   PATCH variants/selling-price { variant_id, selling_price, credit_increase_percentage }
  *   PUT   variants/{id}/activation { activation }
@@ -65,18 +66,37 @@ function checkPrivateKey(pem) {
  * tokens: { get() → { access, refresh, expiresAt } | null, set({ access, refresh, expiresAt }) }
  * The client refreshes an expired (or refused) access token once and repeats the call.
  */
-function createDigikalaClient({ baseUrl, tokens, fetchImpl, timeoutMs = 20000, retries = 2, retryBaseMs = 1000 }) {
+const DEFAULT_USER_AGENT = 'Anbar';
+
+/**
+ * Since 4 Mehr 1405 Digikala requires, on every self-token request,
+ *   User-Agent: DigikalaTrustedBot/SelfToken/<seller code>
+ * (support's answer; not in the Open API spec). Without it: 401 "Invalid User-Agent!".
+ * The seller code is the token's own `seller_id` claim; dk_connection.user_agent overrides it.
+ */
+const trustedUserAgent = (sellerCode) => `DigikalaTrustedBot/SelfToken/${sellerCode}`;
+
+/** The seller code inside an access token (a JWT whose payload carries seller_id); null if absent. */
+function sellerIdOf(accessToken) {
+  try {
+    const p = JSON.parse(Buffer.from(String(accessToken).split('.')[1], 'base64url').toString('utf8'));
+    return Number.isSafeInteger(Number(p.seller_id)) && Number(p.seller_id) > 0 ? Number(p.seller_id) : null;
+  } catch {
+    return null;
+  }
+}
+
+function createDigikalaClient({ baseUrl, tokens, fetchImpl, userAgent, timeoutMs = 20000, retries = 2, retryBaseMs = 1000 }) {
   const doFetch = fetchImpl || globalThis.fetch;
   const root = String(baseUrl || 'https://seller.digikala.com').replace(/\/+$/, '') + '/open-api/v1';
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   async function once(method, path, body, { auth = true } = {}) {
-    const headers = { 'content-type': 'application/json', accept: 'application/json' };
-    if (auth) {
-      const t = tokens.get();
-      if (!t || !t.access) throw new DigikalaError('اتصال دیجی‌کالا برقرار نیست؛ از «تنظیمات ← دیجی‌کالا» دوباره وصل شوید.', { code: 'no_token' });
-      headers.authorization = `Bearer ${t.access}`;
-    }
+    const t = auth ? tokens.get() : null;
+    if (auth && (!t || !t.access)) throw new DigikalaError('اتصال دیجی‌کالا برقرار نیست؛ از «قیمت دیجی‌کالا» دوباره وصل شوید.', { code: 'no_token' });
+    const seller = t ? sellerIdOf(t.access) : null;
+    const headers = { 'content-type': 'application/json', accept: 'application/json', 'user-agent': userAgent || (seller ? trustedUserAgent(seller) : DEFAULT_USER_AGENT) };
+    if (t) headers.authorization = `Bearer ${t.access}`;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     let res;
@@ -132,6 +152,8 @@ function createDigikalaClient({ baseUrl, tokens, fetchImpl, timeoutMs = 20000, r
       return pair;
     },
     refresh,
+    /** One page of the seller's variants: { pager: { page, total_pages, total_rows }, items }. */
+    variants: ({ page = 1, size = 50 } = {}) => call('GET', `/variants?page=${Number(page)}&size=${Number(size)}&sort=id&order=asc`),
     variant: (id) => call('GET', `/variants/${Number(id)}`),
     setPrice: (id, price, creditIncrease) => call('PATCH', '/variants/selling-price', { variant_id: Number(id), selling_price: price, credit_increase_percentage: creditIncrease }),
     setActive: (id, active) => call('PUT', `/variants/${Number(id)}/activation`, { activation: !!active }),
@@ -152,4 +174,4 @@ function tokenPair(d) {
   return { access: d.access_token, refresh: d.refresh_token || null, expiresAt: Number.isNaN(Date.parse(expiresAt)) ? null : expiresAt };
 }
 
-module.exports = { createDigikalaClient, decryptChallenge, checkPrivateKey, DigikalaError };
+module.exports = { createDigikalaClient, decryptChallenge, checkPrivateKey, DigikalaError, DEFAULT_USER_AGENT, trustedUserAgent, sellerIdOf };

@@ -47,6 +47,7 @@ decision taken with them: `docs/decisions.md` (Persian) — read it before chang
   one writer module (`tests/unit/architecture.test.js`). Sync writes pass `fetchedAt` (time the request was sent).
 - Digikala: only `lib/digikala.js` writes `dk_jobs`/`dk_connection`; network calls never inside `db.tx` (queue first,
   worker after commit). Test against `tools/mock-digikala.js`, never the real API. ADR 0007.
+  Import of listings: `importPreview` / `importCreate` in the same module, view `views/digikala-import.js`.
 - Technical decisions: `docs/adr/`. Operations: `/health`, `/ready`, `/metrics` (METRICS_TOKEN), request ids,
   graceful `app.shutdown()`; config is validated in `config.js` (add new variables to its zod schema).
 
@@ -60,6 +61,8 @@ decision taken with them: `docs/decisions.md` (Persian) — read it before chang
 - `public/index.html` (shell, icon sprite, dialogs) + `assets/css/app.css` + `assets/js/`
   (`app.js` router/shell/palette, `api.js`, `ui.js`, `live.js`, `views/<section>.js` each exporting
   `render(view, ctx, params)`; handlers are assigned as `view.onclick = …` so the next view replaces them).
+  In-app training: `assets/js/help.js` holds one guide per section (`GUIDES`), `views/guide.js` is the training
+  page. A new section or sub-page needs a guide, and its labels must match the screen (`tests/e2e/help.spec.js`).
 - `wordpress-plugin/anbar-connector/` — the WooCommerce plugin that pushes changes (signed HMAC);
   served as a zip from `/api/plugin/anbar-connector.zip`. `tests/php/plugin-harness.php` runs it
   under PHP with WordPress stand-ins; `tests/unit/plugin.test.js` feeds its output to the server.
@@ -72,4 +75,5 @@ decision taken with them: `docs/decisions.md` (Persian) — read it before chang
   difference appear as an adjustment on the next statement. Download file names stay ASCII.
 - Phase 4: `lib/tasks.js` (inbox, fed by `sync.onChanges`), `lib/backup.js`, routes `tasks.js`, `system.js`,
   views `inbox.js`, `settings.js` (system and backups), dashboard chart. Deployment: `docker-compose.yml`,
-  `Caddyfile`, `.env.example`, `docs/deploy.md`; the user guide is `docs/guide.md`.
+  `Caddyfile`, `.env.example`, `docs/deploy.md`, `tools/auto-deploy.sh` (server pulls main from cron: backup, rebuild,
+  roll back if unhealthy; `server/backup-now.js`); the user guide is `docs/guide.md`.
