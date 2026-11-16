@@ -128,6 +128,11 @@ function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseM
       const changes = audit.diff({ ...before, mode: MODES[before.mode] }, { ...after, mode: MODES[after.mode] },
         { mode: 'حالت قیمت‌گذاری خودکار', max_change_pct: 'سقف تغییر خودکار (٪)', ticket_sub_category_id: 'زیردسته‌ی تیکت قیمت مرجع', base_url: 'آدرس API', user_agent: 'User-Agent' });
       if (changes.length) audit(actor, { action: 'update', entity: 'settings', id: null, summary: 'تنظیمات قیمت‌گذاری خودکار دیجی‌کالا', changes });
+      // Formulas saved while the robot was off queued nothing, and a dry run ends its jobs: when the
+      // mode is switched on (or from dry run to live), every auto-priced listing is checked once.
+      if (after.mode !== 'off' && after.mode !== before.mode) {
+        for (const l of db.all('SELECT id FROM listings WHERE platform_id = ? AND auto_price = 1 AND active = 1', platformId())) enqueue(l.id, 'mode');
+      }
       events.emit('digikala', {});
     });
     if (after.mode !== 'off') kick();
@@ -197,11 +202,19 @@ function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseM
     db.tx(() => {
       const f = { ...fields, updated_at: nowIso() };
       const cols = Object.keys(f);
-      db.run(`UPDATE dk_jobs SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`, ...cols.map((c) => f[c]), job.id);
+      // A newer request (site price, formula, …) may have refreshed this job while Digikala was being
+      // asked. The job keeps what was really done, and the newer request is queued again as its own job.
+      const now = db.get('SELECT status, reason, target_price, updated_at FROM dk_jobs WHERE id = ?', job.id);
+      const superseded = !!now && now.status === 'pending' &&
+        (now.updated_at !== job.updated_at || now.reason !== job.reason || now.target_price !== job.target_price);
+      const closes = !!fields.status && fields.status !== 'pending';
+      // A retry of a refreshed job is not recorded: the refreshed job is taken again as it is
+      if (closes || !superseded) db.run(`UPDATE dk_jobs SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`, ...cols.map((c) => f[c]), job.id);
       if (extra.listing) {
         const lc = Object.keys(extra.listing);
         db.run(`UPDATE listings SET ${lc.map((c) => `${c} = ?`).join(', ')}, updated_at = ? WHERE id = ?`, ...lc.map((c) => extra.listing[c]), nowIso(), job.listing_id);
       }
+      if (superseded && closes) enqueue(job.listing_id, now.reason);
       if (extra.ok) db.run('UPDATE dk_connection SET last_ok_at = ?, last_error = NULL WHERE id = 1', nowIso());
       if (extra.error) db.run('UPDATE dk_connection SET last_error = ? WHERE id = 1', extra.error);
       if (summary) audit(null, { action: 'digikala', entity: 'listing', id: job.listing_id, summary, changes: extra.changes });
