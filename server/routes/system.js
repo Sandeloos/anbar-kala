@@ -2,7 +2,7 @@
 /** System health, backups and the integrity check (manager only). */
 const fs = require('fs');
 const path = require('path');
-const { notFound } = require('../lib/util');
+const { notFound, HttpError } = require('../lib/util');
 
 const pkg = require('../../package.json');
 const started = new Date().toISOString();
@@ -40,7 +40,13 @@ module.exports = async function systemRoutes(app) {
   });
 
   app.post('/system/backup', manager, async (req) => {
-    const b = backups.now(settings.get('backup_keep'));
+    let b;
+    try {
+      b = backups.now(settings.get('backup_keep'));
+    } catch (err) {
+      req.log.error({ err }, 'manual backup failed');
+      throw new HttpError(500, `${err.message} دوباره امتحان کنید؛ اگر تکرار شد فضای دیسک سرور را بررسی کنید.`);
+    }
     db.tx(() => app.ctx.audit(req, { action: 'backup', entity: 'settings', id: null, summary: `نسخه‌ی پشتیبان دستی: ${b.name}` }));
     return { backup: b, backups: backups.list() };
   });
