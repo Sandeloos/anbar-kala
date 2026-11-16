@@ -72,4 +72,5 @@ decision taken with them: `docs/decisions.md` (Persian) — read it before chang
   difference appear as an adjustment on the next statement. Download file names stay ASCII.
 - Phase 4: `lib/tasks.js` (inbox, fed by `sync.onChanges`), `lib/backup.js`, routes `tasks.js`, `system.js`,
   views `inbox.js`, `settings.js` (system and backups), dashboard chart. Deployment: `docker-compose.yml`,
-  `Caddyfile`, `.env.example`, `docs/deploy.md`; the user guide is `docs/guide.md`.
+  `Caddyfile`, `.env.example`, `docs/deploy.md`, `tools/auto-deploy.sh` (server pulls main from cron: backup, rebuild,
+  roll back if unhealthy; `server/backup-now.js`); the user guide is `docs/guide.md`.
