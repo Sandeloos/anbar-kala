@@ -10,6 +10,7 @@ import { createPicker } from '../picker.js';
 export async function render(view, ctx) {
   const f = { q: ctx.query.get('q') || '', platform: ctx.query.get('platform') || '', partial: ctx.query.get('partial') || '', page: ctx.query.get('page') || '' };
   let { items: platforms } = await get('/platforms');
+  const isDk = (id) => (platforms.find((p) => p.id === Number(id)) || {}).code === 'digikala';
   let data = null;
 
   view.innerHTML = `
@@ -65,12 +66,40 @@ export async function render(view, ctx) {
       <div class="field"><label for="li-title">عنوان در پلتفرم</label><input id="li-title" name="title" value="${esc(l ? l.title || '' : '')}"></div>
       <div class="field"><label for="li-price">قیمت فعلی ما در پلتفرم (تومان، اختیاری)</label><input id="li-price" name="platform_price" inputmode="numeric" value="${l && l.platform_price ? fa(inCurrency(l.platform_price, 'toman')) : ''}"></div>
       <div class="field"><label for="li-note">یادداشت</label><input id="li-note" name="note" value="${esc(l ? l.note || '' : '')}"></div>
+      <div id="li-dk" class="dk-formula"${isDk(l ? l.platform_id : Number(f.platform) || platforms[0].id) ? '' : ' hidden'}>
+        <h3 class="fieldset-title">قیمت‌گذاری خودکار دیجی‌کالا</h3>
+        <label class="switch"><span><strong>قیمت این آگهی خودکار تنظیم شود</strong><small>با تغییر قیمت سایت شرکت، قیمت دیجی‌کالا با فرمول همین بسته‌بندی عوض می‌شود. کد در پلتفرم باید کد تنوع (DKPC) باشد.</small></span><input type="checkbox" name="auto_price" ${l && l.auto_price ? 'checked' : ''}><i></i></label>
+        <div class="form-row cols-3">
+          <div class="field"><label for="li-margin">حاشیه‌ی سود (٪)</label><input id="li-margin" name="margin_pct" inputmode="decimal" value="${l && l.margin_pct !== null && l.margin_pct !== undefined ? fa(l.margin_pct) : ''}" placeholder="مثلاً ۳۰"></div>
+          <div class="field"><label for="li-fixed">مبلغ ثابت اضافه (تومان)</label><input id="li-fixed" name="fixed_add" inputmode="numeric" value="${l && l.fixed_add ? fa(inCurrency(l.fixed_add, 'toman')) : ''}" placeholder="اختیاری"></div>
+          <div class="field"><label for="li-round">گرد کردن به بالا (تومان)</label><input id="li-round" name="round_to" inputmode="numeric" value="${fa(inCurrency(l && l.round_to ? l.round_to : 10000, 'toman'))}"></div>
+        </div>
+        <p class="hint" id="li-dk-preview" aria-live="polite"></p>
+        ${l && l.dk_state === 'blocked' ? `<div class="callout callout-err small">${icon('alert')}<span>دیجی‌کالا قیمت این آگهی را نپذیرفت؛ تنوع غیرفعال و موجودی‌اش صفر شده. بعد از تأیید قیمت مرجع، از صفحه‌ی <a class="link" href="#/digikala">دیجی‌کالا</a> دوباره فعالش کنید.</span></div>` : ''}
+      </div>
       ${l ? `<label class="switch"><span><strong>فعال</strong><small>آگهی غیرفعال در جستجوی ثبت سفارش نمی‌آید.</small></span><input type="checkbox" name="active" ${l.active ? 'checked' : ''}><i></i></label>` : ''}
       <div class="form-actions"><button class="btn btn-primary" type="submit">ذخیره</button></div></form>`);
     const form = $('#f-li', body);
-    let product = l ? { product_id: l.product_id, units_per_pack: l.units_per_pack } : null;
+    let product = l ? { product_id: l.product_id, units_per_pack: l.units_per_pack, regular_price: l.regular_price } : null;
+    const num = (v) => Number(latin(String(v || '')).replace(/[,،٬\s٪%]/g, ''));
+    /** Live preview of the formula, the same arithmetic as the server (lib/digikala.js priceFor). */
+    const preview = () => {
+      const box = $('#li-dk', body);
+      box.hidden = !isDk(Number(form.elements.platform_id.value));
+      const out = $('#li-dk-preview', body);
+      const units = num(form.elements.units.value);
+      const margin = form.elements.margin_pct.value.trim() === '' ? null : num(form.elements.margin_pct.value);
+      if (!product || product.regular_price === null || product.regular_price === undefined || !units || margin === null || Number.isNaN(margin)) { out.textContent = 'با انتخاب کالا، تعداد و حاشیه، قیمت دیجی‌کالا اینجا حساب می‌شود.'; return; }
+      const base = Math.round((product.regular_price * units) / product.units_per_pack);
+      const step = Math.max(1, num(form.elements.round_to.value) * 10 || 10000);
+      const price = Math.ceil(Math.round(base * (1 + margin / 100) + num(form.elements.fixed_add.value) * 10) / step) * step;
+      out.textContent = `قیمت سایت برای ${fa(units)} عدد: ${moneyText(base, 'toman')}؛ قیمت دیجی‌کالا با این فرمول: ${moneyText(price, 'toman')}`;
+    };
+    form.addEventListener('input', preview);
+    form.elements.platform_id.addEventListener('change', preview);
     const hint = () => { $('#li-units-hint', body).textContent = product ? `بسته‌ی کامل این کالا ${product.units_per_pack} عدد است.` : ''; };
     hint();
+    preview();
     createPicker($('#li-pick', body), {
       params: () => ({ products_only: 1 }),
       onPick(it) {
@@ -79,6 +108,7 @@ export async function render(view, ctx) {
         if (!form.elements.units.value) form.elements.units.value = fa(it.units_per_pack);
         if (!form.elements.title.value) form.elements.title.value = it.name;
         hint();
+        preview();
       }
     });
     form.addEventListener('submit', async (e) => {
@@ -89,6 +119,14 @@ export async function render(view, ctx) {
         platform_id: Number(v.platform_id), product_id: product.product_id, code: latin(v.code || '').trim() || null, title: v.title, units: latin(v.units),
         platform_price: latin(v.platform_price || '').replace(/[,،٬\s]/g, '') || null, note: v.note, active: l ? form.elements.active.checked : true
       };
+      if (isDk(payload.platform_id)) {
+        Object.assign(payload, {
+          auto_price: form.elements.auto_price.checked,
+          margin_pct: latin(v.margin_pct || '').replace(/[٪%\s]/g, '') || null,
+          fixed_add: latin(v.fixed_add || '').replace(/[,،٬\s]/g, '') || null,
+          round_to: latin(v.round_to || '').replace(/[,،٬\s]/g, '') || null
+        });
+      }
       const btn = $('button[type=submit]', form);
       busy(btn, true);
       try {

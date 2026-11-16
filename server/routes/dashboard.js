@@ -76,6 +76,8 @@ module.exports = async function dashboardRoutes(app) {
       price_changes_24h: db.get("SELECT COUNT(*) AS n FROM price_history WHERE price_changed = 1 AND source <> 'import' AND observed_at >= ?", day).n,
       returns_waiting: db.get('SELECT COUNT(*) AS n FROM returns WHERE disposition IS NULL AND voided_at IS NULL').n,
       tasks_open: db.get("SELECT COUNT(*) AS n FROM tasks WHERE status = 'open'").n,
+      // Digikala prices waiting for a person: a big change to approve, or a refused price (variant off)
+      digikala_attention: db.get("SELECT (SELECT COUNT(*) FROM dk_jobs WHERE status = 'needs_approval') + (SELECT COUNT(*) FROM listings WHERE dk_state = 'blocked') AS n").n,
       // Lines of orders placed before today that nobody has received yet
       receiving_due: db.get(`SELECT COUNT(*) AS n FROM order_lines l JOIN orders o ON o.id = l.order_id
                              WHERE l.status = 'pending' AND o.cancelled_at IS NULL AND o.ordered_at < ?`, dayStart(tehranDay(new Date().toISOString()).date)).n

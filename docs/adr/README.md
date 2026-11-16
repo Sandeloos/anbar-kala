@@ -11,3 +11,4 @@ The owner-facing decisions (in Persian) are in `docs/decisions.md`.
 | [0004](0004-price-at-order-time.md) | Settlement price from an append-only price history |
 | [0005](0005-observability-and-shutdown.md) | Health, readiness, metrics and graceful shutdown without extra services |
 | [0006](0006-unit-of-work-and-ownership.md) | One unit of work per command, one owner per money table |
+| [0007](0007-digikala-autopricing.md) | Automatic Digikala pricing through the seller Open API |

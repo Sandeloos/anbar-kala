@@ -76,6 +76,8 @@ function createJobs(ctx, log) {
         nightly();
         housekeeping();
         await syncDue();
+        // Digikala price jobs waiting for a retry (the fresh ones start right away)
+        if (ctx.digikala) await ctx.digikala.processDue();
       } finally {
         busy = null;
       }
