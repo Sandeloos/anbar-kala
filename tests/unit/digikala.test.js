@@ -314,3 +314,39 @@ test('matcher: rejects conflicting models and sizes, keeps sale pack separate, a
   const duplicates = createMatcher([product(6, 'انبر KH38', 'same'), product(7, 'انبر KH38', 'same')]);
   assert.equal(duplicates({ title: 'انبر KH38', supplier_code: 'same' })[0].confident, false);
 });
+
+test('description matching breaks name ties without accepting a conflicting model', () => {
+  const match = createMatcher([
+    { id: 1, name: 'انبر رادن KH38', description: 'مناسب کابل مسی روکش دار فشار قوی' },
+    { id: 2, name: 'انبر رادن KH38', description: 'مناسب کابل آلومینیومی بدون روکش فشار ضعیف' },
+    { id: 3, name: 'انبر رادن KH39', description: 'مناسب کابل مسی روکش دار فشار قوی' }
+  ]);
+  const results = match({ title: 'انبر رادن KH38', description: 'مناسب کابل مسی روکش دار فشار قوی' });
+  assert.equal(results[0].product_id, 1);
+  assert.ok(results[0].description_terms.includes('مسی'));
+  assert.ok(results[0].score > results[1].score);
+  assert.ok(results.every((s) => s.product_id !== 3));
+});
+
+test('import multiplier is saved with packaging and queues an exact price; invalid factors fail', async (t) => {
+  const env = await setup(t);
+  const { api, dk, ctx, product, c } = env;
+  await connectAndList(env, { variant: { price_list: 1000000, price_sale: 1000000 } });
+  ctx.db.run('UPDATE products SET regular_price = 4000000, description = ? WHERE id = ?', 'کابل مسی روکش دار', product.id);
+  dk.addVariant({ id: 901, title: 'بسته 2 عددی', product_title: 'کابل مسی', description: '<p>کابل مسی روکش دار</p>', price_sale: 2600000 });
+  const preview = await api.post('/api/digikala/import/preview');
+  assert.equal(preview.status, 200);
+  assert.equal(preview.body.items.find((v) => v.variant_id === 901).description, 'کابل مسی روکش دار');
+  const row = { variant_id: 901, product_id: product.id, units: 2, multiplier: '۱٫۳' };
+  assert.equal((await api.post('/api/digikala/import', { preview_id: preview.body.preview_id, rows: [{ ...row, multiplier: 0 }] })).status, 400);
+  await api.put('/api/digikala/settings', { mode: 'dry_run' });
+  const saved = await api.post('/api/digikala/import', { preview_id: preview.body.preview_id, rows: [row] });
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  await c.digikala.kick();
+  const listing = ctx.db.get("SELECT * FROM listings WHERE code = '901'");
+  assert.equal(listing.auto_price, 1);
+  assert.equal(Math.round(listing.margin_pct), 30);
+  assert.equal(priceFor(listing, { ...product, regular_price: 4000000 }).price, 2600000);
+  assert.ok(ctx.db.get('SELECT * FROM dk_jobs WHERE listing_id = ?', listing.id));
+  assert.equal((await api.post('/api/digikala/import', { preview_id: preview.body.preview_id, rows: [row] })).body.created, 0);
+});

@@ -3,6 +3,7 @@
  * Digikala automatic pricing. The connection (key, token, mode, limits) is for the manager;
  * approving a large change, re-activating a refused variant and "check now" for any admin.
  */
+const { toLatinDigits } = require('../lib/util');
 const { z, intIn, optText } = require('./validate');
 
 module.exports = async function digikalaRoutes(app) {
@@ -58,7 +59,8 @@ module.exports = async function digikalaRoutes(app) {
       rows: z.array(z.object({
         variant_id: intIn('کد تنوع', 1, 1e12),
         product_id: intIn('کالای سایت', 1, 1e9),
-        units: intIn('تعداد عدد در هر فروش', 1, 100000)
+        units: intIn('تعداد عدد در هر فروش', 1, 100000),
+        multiplier: z.preprocess((v) => v === undefined ? undefined : Number(toLatinDigits(String(v)).replace(/٫/g, '.')), z.number().min(0.5).max(11).optional())
       }), { error: 'چیزی انتخاب نشده.' }).min(1, 'دست‌کم یک تنوع را انتخاب کنید.').max(5000)
     }).parse(req.body || {});
     return digikala.importCreate(req, b.preview_id, b.rows);

@@ -71,6 +71,7 @@ function normalise(raw, unit, parent) {
     parent_woo_id: parent ? Number(parent.id) : null,
     type: parent ? 'variation' : String(raw.type || 'simple'),
     name: name || `#${raw.id}`,
+    description: [raw.description, raw.short_description, parent?.description, parent?.short_description].some((v) => v !== undefined) ? decodeEntities([raw.description, raw.short_description, parent?.description, parent?.short_description].filter(Boolean).join(' ')).slice(0, 20000) : undefined,
     parent_name: parentName,
     attributes: attrs || null,
     sku: raw.sku ? String(raw.sku) : null,
@@ -168,11 +169,11 @@ function createSync({ db, config, secrets, events, log, fetchImpl, metrics }) {
         const existing = db.get('SELECT * FROM products WHERE company_id = ? AND woo_id = ?', comp.id, it.woo_id);
         if (!existing) {
           const guess = guessUnits(`${it.name} ${it.attributes || ''}`);
-          const info = db.run(`INSERT INTO products (company_id, woo_id, parent_woo_id, type, name, parent_name, attributes, sku, permalink, slug,
+          const info = db.run(`INSERT INTO products (company_id, woo_id, parent_woo_id, type, name, parent_name, attributes, sku, permalink, slug, description,
               site_status, regular_price, sale_price, stock_status, stock_quantity, manage_stock, site_modified_at, search_text,
               units_per_pack, units_guessed, last_checked_at, last_changed_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          comp.id, it.woo_id, it.parent_woo_id, it.type, it.name, it.parent_name, it.attributes, it.sku, it.permalink, it.slug,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          comp.id, it.woo_id, it.parent_woo_id, it.type, it.name, it.parent_name, it.attributes, it.sku, it.permalink, it.slug, it.description || '',
           it.site_status, it.regular_price, it.sale_price, it.stock_status, it.stock_quantity, it.manage_stock, it.site_modified_at, search,
           guess || 1, guess ? 1 : 0, now, now, now, now);
           const id = Number(info.lastInsertRowid);
@@ -204,14 +205,14 @@ function createSync({ db, config, secrets, events, log, fetchImpl, metrics }) {
             after: { regular_price: it.regular_price, stock_status: it.stock_status, stock_quantity: it.stock_quantity }
           });
         }
-        db.run(`UPDATE products SET parent_woo_id = ?, type = ?, name = ?, parent_name = ?, attributes = ?, sku = ?, permalink = ?, slug = ?,
+        db.run(`UPDATE products SET parent_woo_id = ?, type = ?, name = ?, parent_name = ?, attributes = ?, sku = ?, permalink = ?, slug = ?, description = COALESCE(?, description),
                   site_status = ?, regular_price = ?, sale_price = ?, stock_status = ?, stock_quantity = ?, manage_stock = ?,
                   site_modified_at = ?, search_text = ?, last_checked_at = ?, removed_at = NULL,
                   price_source = CASE WHEN ? THEN 'site' ELSE price_source END,
                   last_changed_at = CASE WHEN ? THEN ? ELSE last_changed_at END,
                   updated_at = CASE WHEN ? THEN ? ELSE updated_at END
                 WHERE id = ?`,
-        it.parent_woo_id, it.type, it.name, it.parent_name, it.attributes, it.sku, it.permalink, it.slug,
+        it.parent_woo_id, it.type, it.name, it.parent_name, it.attributes, it.sku, it.permalink, it.slug, it.description ?? null,
         it.site_status, it.regular_price, it.sale_price, it.stock_status, it.stock_quantity, it.manage_stock,
         it.site_modified_at, search, now, priceChanged ? 1 : 0,
         priceChanged || stockChanged ? 1 : 0, now,

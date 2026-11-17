@@ -117,6 +117,8 @@ final class Anbar_Connector
             'status' => $p->get_status(),
             'permalink' => $p->get_permalink(),
             'sku' => $p->get_sku('edit'),
+            'description' => method_exists($p, 'get_description') ? $p->get_description('edit') : '',
+            'short_description' => method_exists($p, 'get_short_description') ? $p->get_short_description('edit') : '',
             'regular_price' => (string) $p->get_regular_price('edit'),
             'sale_price' => (string) $p->get_sale_price('edit'),
             'price' => (string) $p->get_price('edit'),

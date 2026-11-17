@@ -13,11 +13,11 @@
  */
 
 const PRODUCT_FIELDS = [
-  'id', 'name', 'slug', 'type', 'status', 'permalink', 'sku', 'regular_price', 'sale_price', 'price',
+  'description', 'short_description', 'id', 'name', 'slug', 'type', 'status', 'permalink', 'sku', 'regular_price', 'sale_price', 'price',
   'stock_status', 'stock_quantity', 'manage_stock', 'date_modified_gmt', 'parent_id', 'variations', 'attributes'
 ].join(',');
 const VARIATION_FIELDS = [
-  'id', 'name', 'status', 'permalink', 'sku', 'regular_price', 'sale_price', 'price',
+  'description', 'short_description', 'id', 'name', 'status', 'permalink', 'sku', 'regular_price', 'sale_price', 'price',
   'stock_status', 'stock_quantity', 'manage_stock', 'date_modified_gmt', 'attributes'
 ].join(',');
 

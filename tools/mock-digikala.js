@@ -118,7 +118,7 @@ function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3
     get url() { return base; },
     /** Adds a seller variant (prices in rials). */
     addVariant(v) {
-      const full = { id: v.id, product_id: v.product_id || v.id + 100000, title: v.title || (v.product_title ? '' : `تنوع ${v.id}`), product_title: v.product_title || '', supplier_code: v.supplier_code || '',
+      const full = { description: v.description || '', product_description: v.product_description || '', id: v.id, product_id: v.product_id || v.id + 100000, title: v.title || (v.product_title ? '' : `تنوع ${v.id}`), product_title: v.product_title || '', supplier_code: v.supplier_code || '',
         active: true, price_list: v.price_list, price_sale: v.price_sale ?? v.price_list,
         credit_increase_percentage: v.credit_increase_percentage ?? 0, marketplace_seller_stock: v.marketplace_seller_stock ?? 10, product_url: `https://www.digikala.com/product/dkp-${v.product_id || v.id}/` };
       variants.set(v.id, full);

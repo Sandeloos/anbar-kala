@@ -26,6 +26,7 @@ const crypto = require('crypto');
 const { nowIso, badRequest, notFound, conflict, searchKey } = require('./util');
 const { createDigikalaClient, decryptChallenge, checkPrivateKey, DigikalaError, DEFAULT_USER_AGENT, trustedUserAgent, sellerIdOf } = require('./digikala-api');
 const { guessUnits } = require('./sync');
+const { plain, readProductDescription } = require('./product-content');
 
 const MODES = { off: 'خاموش', dry_run: 'آزمایشی (چیزی فرستاده نمی‌شود)', live: 'فعال' };
 const SELF_TOKEN_DAYS = 360; // what the seller panel shows for a new self-token
@@ -406,6 +407,28 @@ function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseM
     }
     db.tx(() => db.run('UPDATE dk_connection SET last_ok_at = ?, last_error = NULL WHERE id = 1', nowIso()));
 
+    // Product copy is shared between variants; cache successful reads for a day and failures for 15 minutes.
+    const unique = [...new Set(all.filter((v) => !v.description && !v.product_description).map((v) => Number(v.product_id)).filter(Boolean))];
+    const content = new Map();
+    let cursor = 0;
+    const contentDeadline = Date.now() + 20000;
+    await Promise.all(Array.from({ length: Math.min(6, unique.length) }, async () => {
+      while (cursor < unique.length) {
+        const productId = unique[cursor++];
+        let cached = db.get('SELECT * FROM dk_product_content WHERE product_id = ?', productId);
+        const ttl = cached?.description ? 864e5 : 15 * 60e3;
+        if (!cached || Date.now() - Date.parse(cached.checked_at) > ttl) {
+          if (Date.now() >= contentDeadline) continue;
+          const description = c.base_url.replace(/\/+$/, '') === 'https://seller.digikala.com'
+            ? await readProductDescription(productId, fetchImpl).catch(() => '') : '';
+          cached = { description };
+          db.tx(() => db.run('INSERT INTO dk_product_content (product_id, description, checked_at) VALUES (?, ?, ?) ON CONFLICT(product_id) DO UPDATE SET description = excluded.description, checked_at = excluded.checked_at', productId, description, nowIso()));
+        }
+        content.set(productId, cached.description);
+      }
+    }));
+    for (const v of all) v.product_description = v.product_description || content.get(Number(v.product_id)) || '';
+
     const linked = new Set(db.all('SELECT code FROM listings WHERE platform_id = ?', platformId()).map((l) => variantIdOf(l.code)).filter(Boolean));
     const fresh = all.map(variantView).filter((v) => v.variant_id && !linked.has(v.variant_id));
     // A supplier code that is the seller's own code, or the same on many variants, says nothing about the product
@@ -416,7 +439,7 @@ function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseM
       const k = codeKey(v.supplier_code || '');
       if (k && (k === seller || counts.get(k) > 5)) v.supplier_code = null;
     }
-    const products = db.all(`SELECT p.id, p.name, p.sku, p.site_status, p.units_per_pack, p.regular_price, p.company_id, c.name AS company_name, c.currency
+    const products = db.all(`SELECT p.id, p.name, p.description, p.sku, p.site_status, p.units_per_pack, p.regular_price, p.company_id, c.name AS company_name, c.currency
                                         FROM products p JOIN companies c ON c.id = p.company_id WHERE p.removed_at IS NULL AND c.active = 1`);
     const match = createMatcher(products);
     const items = fresh.map((v) => ({ ...v, suggestions: match(v) }));
@@ -436,7 +459,7 @@ function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseM
     const opportunities = complete ? products.filter((p) => p.site_status === 'publish' && !represented.has(p.id)).map((p) => ({
       ...p, presence: possible.has(p.id) ? 'uncertain' : 'not_found'
     })) : [];
-    return { preview_id: id, total: all.length, already_linked: all.length - fresh.length, items, opportunities, complete,
+    return { preview_id: id, total: all.length, already_linked: all.length - fresh.length, items, opportunities, complete, description_pending: unique.filter((id) => !content.has(id)).length,
       companies: db.all('SELECT id, name, last_full_sync_at, sync_state, sync_error FROM companies WHERE active = 1') };
   }
 
@@ -457,11 +480,12 @@ function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseM
         if (db.get('SELECT 1 FROM listings WHERE platform_id = ? AND code = ?', pid, code)) { skipped.push({ variant_id: v.variant_id, reason: 'آگهی دارد' }); continue; }
         const now = nowIso();
         const title = v.title.slice(0, 300);
-        const id = Number(db.run(`INSERT INTO listings (platform_id, product_id, code, title, units, platform_price, note, search_text, created_at, updated_at)
-                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        const id = Number(db.run(`INSERT INTO listings (platform_id, product_id, code, title, units, platform_price, note, search_text, auto_price, margin_pct, round_to, created_at, updated_at)
+                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         pid, product.id, code, title, r.units, v.price_sale, v.supplier_code ? `کد تأمین‌کننده: ${v.supplier_code}` : null,
-        searchKey([code, title, product.name, product.sku].filter(Boolean).join(' ')), now, now).lastInsertRowid);
-        audit(actor, { action: 'create', entity: 'listing', id, summary: `ورود آگهی دیجی‌کالا ${code} برای «${product.name}» — هر فروش ${r.units} عدد از ${product.units_per_pack}` });
+        searchKey([code, title, product.name, product.sku].filter(Boolean).join(' ')), r.multiplier === undefined ? 0 : 1, r.multiplier === undefined ? null : (r.multiplier - 1) * 100, 1, now, now).lastInsertRowid);
+        if (r.multiplier !== undefined && enqueue(id, 'formula')) db.afterCommit(kick);
+        audit(actor, { action: 'create', entity: 'listing', id, summary: `ورود آگهی دیجی‌کالا ${code} برای «${product.name}» — هر فروش ${r.units} عدد از ${product.units_per_pack}${r.multiplier === undefined ? '' : ` — ضریب قیمت ${r.multiplier}`}` });
         created.push({ id, variant: v.variant_id });
       }
       if (created.length) events.emit('listings', { ids: created.map((x) => x.id) });
@@ -483,7 +507,7 @@ function variantView(v) {
   const title = own && product && !own.includes(product) ? `${product} — ${own}` : own || product;
   const extra = v.sku_config ? [v.sku_config.color, v.sku_config.size].filter((x) => typeof x === 'string' && x).join(' ') : '';
   return {
-    variant_id: Number(v.id || v.product_variant_id) || null, product_id: v.product_id ?? null, title: title || `تنوع ${v.id}`, extra,
+    variant_id: Number(v.id || v.product_variant_id) || null, product_id: v.product_id ?? null, title: title || `تنوع ${v.id}`, extra, description: plain(v.description || v.product_description || v.product?.description),
     supplier_code: v.supplier_code ? String(v.supplier_code).trim() : null, price_sale: v.price_sale ?? null, price_list: v.price_list ?? null,
     active: v.active !== false, stock: v.marketplace_seller_stock ?? null, image_src: v.image_src || null, product_url: v.product_url || null,
     units_guess: guessUnits(`${title} ${extra}`)
@@ -515,6 +539,7 @@ function createMatcher(products) {
   const bySku = new Map();
   const index = new Map();
   const toks = new Map();
+  const descriptions = new Map();
   for (const p of products) {
     if (p.sku) {
       const k = codeKey(p.sku);
@@ -522,25 +547,36 @@ function createMatcher(products) {
     }
     const w = new Set(words(p.name));
     toks.set(p.id, w);
-    for (const t of w) index.set(t, [...(index.get(t) || []), p]);
+    descriptions.set(p.id, new Set(words(plain(p.description))));
+    for (const t of new Set([...w, ...descriptions.get(p.id)])) index.set(t, [...(index.get(t) || []), p]);
   }
   const view = (p, score, why) => ({
     product_id: p.id, name: p.name, sku: p.sku, company_id: p.company_id, company_name: p.company_name, currency: p.currency,
-    units_per_pack: p.units_per_pack, regular_price: p.regular_price, score: Math.round(score * 100) / 100, why, confident: false
+    units_per_pack: p.units_per_pack, regular_price: p.regular_price, description: plain(p.description), score: Math.round(score * 100) / 100, why, confident: false
   });
   return (v) => {
     const out = new Map();
     const ident = identity(v.title);
     if (v.supplier_code) for (const p of bySku.get(codeKey(v.supplier_code)) || []) { if (compatible(ident, identity(p.name))) out.set(p.id, view(p, 1, 'sku')); }
     const mine = new Set(words(`${v.title} ${v.extra || ''}`));
+    const copy = new Set(words(v.description || ''));
     const shared = new Map();
-    for (const t of mine) for (const p of index.get(t) || []) shared.set(p, (shared.get(p) || 0) + 1);
-    const byName = [...shared].map(([p, n]) => [p, (2 * n) / (mine.size + toks.get(p.id).size)])
+    for (const t of new Set([...mine, ...copy])) for (const p of index.get(t) || []) shared.set(p, true);
+    const byName = [...shared.keys()].map((p) => {
+      const titleWords = toks.get(p.id);
+      const n = [...mine].filter((w) => titleWords.has(w)).length;
+      const nameScore = 2 * n / Math.max(1, mine.size + titleWords.size);
+      const desc = descriptions.get(p.id);
+      const common = [...copy].filter((w) => desc.has(w));
+      const descScore = common.length >= 2 ? 2 * common.length / Math.max(1, copy.size + desc.size) : 0;
+      const score = nameScore >= 0.25 ? Math.min(0.99, copy.size ? nameScore * 0.8 + 0.2 * descScore : nameScore) : Math.min(0.49, descScore * 0.49);
+      return [p, score, common.slice(0, 8), nameScore];
+    })
       .filter(([p, s]) => s >= 0.25 && compatible(ident, identity(p.name))).sort((a, b) => b[1] - a[1]).slice(0, 3);
-    for (const [p, s] of byName) if (!out.has(p.id)) out.set(p.id, view(p, s, 'name'));
+    for (const [p, s, evidence, nameScore] of byName) if (!out.has(p.id)) out.set(p.id, { ...view(p, s, 'name'), description_terms: evidence, name_score: nameScore });
     const ranked = [...out.values()].sort((a, b) => b.score - a.score).slice(0, 3);
     const top = ranked[0];
-    if (top) top.confident = (top.why === 'sku' || (top.score >= 0.8 && ident.models.length > 0 && identity(top.name).models.length > 0))
+    if (top) top.confident = (top.why === 'sku' || ((top.name_score ?? top.score) >= 0.8 && ident.models.length > 0 && identity(top.name).models.length > 0))
       && (!ranked[1] || top.score - ranked[1].score >= 0.15);
     return ranked;
   };
