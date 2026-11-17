@@ -21,7 +21,7 @@ const SECTIONS = [
   { group: 'کار روزانه', path: 'changes', label: 'تغییرات قیمت', icon: 'trend', count: 'price_changes_24h', countTitle: 'تغییر در ۲۴ ساعت', load: () => import('./views/changes.js') },
   { group: 'تعریف‌ها', path: 'products', label: 'کالاها', icon: 'box', count: 'needs_setup', countTitle: 'کالای تنظیم‌نشده', load: () => import('./views/products.js') },
   { group: 'تعریف‌ها', path: 'listings', label: 'آگهی‌ها', icon: 'link', load: () => import('./views/listings.js') },
-  { group: 'تعریف‌ها', path: 'digikala', label: 'قیمت دیجی‌کالا', icon: 'trend', count: 'digikala_attention', danger: true, countTitle: 'منتظر تأیید یا متوقف', load: () => import('./views/digikala.js') },
+  { group: 'تعریف‌ها', path: 'digikala', label: 'دیجی‌کالا', icon: 'trend', count: 'digikala_attention', danger: true, countTitle: 'منتظر تأیید یا متوقف', load: () => import('./views/digikala.js') },
   { group: 'تعریف‌ها', path: 'companies', label: 'شرکت‌ها', icon: 'building', count: 'sync_errors', danger: true, countTitle: 'خطای اتصال', load: () => import('./views/companies.js') },
   { group: 'تعریف‌ها', path: 'warehouses', label: 'انبارها', icon: 'warehouse', load: () => import('./views/warehouses.js') },
   { group: 'مدیریت', path: 'users', label: 'کاربران', icon: 'users', manager: true, load: () => import('./views/users.js') },
@@ -146,14 +146,14 @@ function renderNav(active) {
     if (!groups.has(s.group)) groups.set(s.group, []);
     groups.get(s.group).push(s);
   }
-  $('#side-nav').innerHTML = [...groups].map(([title, items]) => `<div class="nav-group">
-      <span class="nav-group-title">${esc(title)}</span>
+  $('#side-nav').innerHTML = [...groups].map(([title, items]) => `<details class="nav-group"${window.matchMedia('(max-width: 1023px)').matches || title === 'کار روزانه' || items.some((s) => s.path === active) ? ' open' : ''}>
+      <summary class="nav-group-title">${esc(title)}</summary>
       ${items.map((s) => {
         const n = s.count ? ctx.counts[s.count] || 0 : 0;
         return `<a class="nav-item" href="#/${s.path}"${s.path === active ? ' aria-current="page"' : ''}>${icon(s.icon)}<span>${s.label}</span>` +
           (n ? `<span class="nav-count${s.danger ? ' is-danger' : ''}" title="${fa(n)} ${s.countTitle}">${fa(n > 999 ? '999+' : n)}</span>` : '') + '</a>';
       }).join('')}
-    </div>`).join('');
+    </details>`).join('');
   const current = $('.nav-item[aria-current="page"]');
   if (current && window.matchMedia('(max-width: 1023px)').matches) current.scrollIntoView({ block: 'nearest', inline: 'center' });
 }

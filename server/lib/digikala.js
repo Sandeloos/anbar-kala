@@ -416,15 +416,28 @@ function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseM
       const k = codeKey(v.supplier_code || '');
       if (k && (k === seller || counts.get(k) > 5)) v.supplier_code = null;
     }
-    const match = createMatcher(db.all(`SELECT p.id, p.name, p.sku, p.units_per_pack, p.regular_price, p.company_id, c.name AS company_name, c.currency
-                                        FROM products p JOIN companies c ON c.id = p.company_id WHERE p.removed_at IS NULL AND c.active = 1`));
+    const products = db.all(`SELECT p.id, p.name, p.sku, p.site_status, p.units_per_pack, p.regular_price, p.company_id, c.name AS company_name, c.currency
+                                        FROM products p JOIN companies c ON c.id = p.company_id WHERE p.removed_at IS NULL AND c.active = 1`);
+    const match = createMatcher(products);
     const items = fresh.map((v) => ({ ...v, suggestions: match(v) }));
     items.sort((a, b) => ((b.suggestions[0] || {}).score || 0) - ((a.suggestions[0] || {}).score || 0));
 
     for (const [k, p] of previews) if (Date.now() - p.at > PREVIEW_TTL) previews.delete(k);
     const id = crypto.randomBytes(12).toString('base64url');
     previews.set(id, { at: Date.now(), variants: new Map(fresh.map((v) => [v.variant_id, v])) });
-    return { preview_id: id, total: all.length, already_linked: all.length - fresh.length, items };
+    const represented = new Set(db.all('SELECT product_id FROM listings WHERE platform_id = ?', platformId()).map((l) => l.product_id));
+    const possible = new Set();
+    for (const v of all.map(variantView)) {
+      const k = codeKey(v.supplier_code || '');
+      if (k && (k === seller || counts.get(k) > 5)) v.supplier_code = null;
+      for (const suggestion of match(v)) possible.add(suggestion.product_id);
+    }
+    const complete = pages <= maxPages;
+    const opportunities = complete ? products.filter((p) => p.site_status === 'publish' && !represented.has(p.id)).map((p) => ({
+      ...p, presence: possible.has(p.id) ? 'uncertain' : 'not_found'
+    })) : [];
+    return { preview_id: id, total: all.length, already_linked: all.length - fresh.length, items, opportunities, complete,
+      companies: db.all('SELECT id, name, last_full_sync_at, sync_state, sync_error FROM companies WHERE active = 1') };
   }
 
   /** Creates the confirmed listings together: [{ variant_id, product_id, units }]. */
@@ -478,7 +491,20 @@ function variantView(v) {
 }
 
 const STOP = new Set(['مدل', 'بسته', 'عددی', 'عدد', 'تایی', 'و', 'با', 'برای', 'از', 'به', 'در', 'کد', 'رنگ', 'سایز', 'طرح', 'مناسب', 'مجموعه', 'یک', 'دو', 'سه']);
-const words = (s) => searchKey(s).split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1 && !STOP.has(w));
+const words = (s) => searchKey(s).split(/گارانتی|ضمانت/)[0].replace(/(?:بسته|جعبه)\s*\d+\s*(?:عددی|تایی|عدد)?/g, ' ').split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1 && !STOP.has(w));
+// Pack quantities and warranty text are not product identity. Preserve model digits and suffixes.
+function identity(text) {
+  const clean = searchKey(text).split(/گارانتی|ضمانت/)[0]
+    .replace(/(?:بسته|جعبه|کارتن)\s*\d+\s*(?:عددی|تایی|عدد|تایی)?/g, ' ')
+    .replace(/\d+\s*(?:عددی|تایی|عدد)/g, ' ');
+  const models = (clean.match(/[a-z]+[\s-]*\d+[a-z]*|\d+[a-z]+\d*/g) || []).map((x) => x.replace(/[\s-]/g, ''));
+  const sizes = (clean.replace(/[a-z]+[\s-]*\d+[a-z]*|\d+[a-z]+/g, ' ').match(/\d+(?:\.\d+)?/g) || []);
+  return { models, sizes };
+}
+function compatible(a, b) {
+  if (a.models.length && b.models.length && !a.models.some((m) => b.models.includes(m))) return false;
+  return !(a.sizes.length && b.sizes.length && a.sizes.join(',') !== b.sizes.join(','));
+}
 const codeKey = (s) => searchKey(s).replace(/[\s\-_./]/g, '');
 
 /**
@@ -500,18 +526,23 @@ function createMatcher(products) {
   }
   const view = (p, score, why) => ({
     product_id: p.id, name: p.name, sku: p.sku, company_id: p.company_id, company_name: p.company_name, currency: p.currency,
-    units_per_pack: p.units_per_pack, regular_price: p.regular_price, score: Math.round(score * 100) / 100, why
+    units_per_pack: p.units_per_pack, regular_price: p.regular_price, score: Math.round(score * 100) / 100, why, confident: false
   });
   return (v) => {
     const out = new Map();
-    if (v.supplier_code) for (const p of bySku.get(codeKey(v.supplier_code)) || []) out.set(p.id, view(p, 1, 'sku'));
+    const ident = identity(v.title);
+    if (v.supplier_code) for (const p of bySku.get(codeKey(v.supplier_code)) || []) { if (compatible(ident, identity(p.name))) out.set(p.id, view(p, 1, 'sku')); }
     const mine = new Set(words(`${v.title} ${v.extra || ''}`));
     const shared = new Map();
     for (const t of mine) for (const p of index.get(t) || []) shared.set(p, (shared.get(p) || 0) + 1);
     const byName = [...shared].map(([p, n]) => [p, (2 * n) / (mine.size + toks.get(p.id).size)])
-      .filter(([, s]) => s >= 0.25).sort((a, b) => b[1] - a[1]).slice(0, 3);
+      .filter(([p, s]) => s >= 0.25 && compatible(ident, identity(p.name))).sort((a, b) => b[1] - a[1]).slice(0, 3);
     for (const [p, s] of byName) if (!out.has(p.id)) out.set(p.id, view(p, s, 'name'));
-    return [...out.values()].slice(0, 3);
+    const ranked = [...out.values()].sort((a, b) => b.score - a.score).slice(0, 3);
+    const top = ranked[0];
+    if (top) top.confident = (top.why === 'sku' || (top.score >= 0.8 && ident.models.length > 0 && identity(top.name).models.length > 0))
+      && (!ranked[1] || top.score - ranked[1].score >= 0.15);
+    return ranked;
   };
 }
 

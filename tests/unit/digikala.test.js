@@ -9,7 +9,7 @@ const assert = require('node:assert/strict');
 const crypto = require('crypto');
 const { makeApp, addUser, client, shop, addCompany } = require('./helpers');
 const { createMockDigikala } = require('../../tools/mock-digikala');
-const { priceFor, variantIdOf } = require('../../server/lib/digikala');
+const { priceFor, variantIdOf, createMatcher } = require('../../server/lib/digikala');
 
 const keys = crypto.generateKeyPairSync('rsa', { modulusLength: 2048, publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } });
 
@@ -72,7 +72,7 @@ test('connect: the code from the self-token page is opened with the private key;
   const wrong = crypto.publicEncrypt({ key: other.publicKey, padding: crypto.constants.RSA_PKCS1_PADDING }, Buffer.from('x')).toString('base64');
   const bad = await api.post('/api/digikala/connect', { challenge: wrong });
   assert.equal(bad.status, 400);
-  assert.match(bad.body.error, /نپذیرفت.*کد تازه.*جفتِ همین کلید/s, 'a wrong key shows up as a refused code');
+  assert.match(bad.body.error, /(?:نپذیرفت.*کد تازه|با این کلید خصوصی باز نشد).*جفتِ همین کلید/s, 'a wrong key shows up as a refused code');
   assert.equal((await api.post('/api/digikala/connect', { client_code: 'abc', challenge: dk.challenge() })).status, 200);
   const row = ctx.db.get('SELECT * FROM dk_connection');
   assert.ok(row.private_key_enc && !row.private_key_enc.includes('PRIVATE KEY'), 'key encrypted');
@@ -254,6 +254,9 @@ test('import: every variant is read, matched by supplier code or name, and only 
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.total, 65, 'all pages read');
   assert.equal(r.body.already_linked, 1);
+  assert.equal(r.body.complete, true);
+  assert.ok(Array.isArray(r.body.opportunities));
+  assert.ok(r.body.opportunities.every((p) => p.id !== product.id));
   const by = Object.fromEntries(r.body.items.map((x) => [x.variant_id, x]));
   assert.equal(by[501], undefined, 'linked variants are left out');
   assert.equal(by[601].suggestions[0].product_id, product.id);
@@ -290,4 +293,24 @@ test('import: every variant is read, matched by supplier code or name, and only 
   assert.equal(again.body.created, 0);
   const next = await api.post('/api/digikala/import/preview');
   assert.equal(next.body.already_linked, 3);
+});
+
+
+test('matcher: rejects conflicting models and sizes, keeps sale pack separate, and flags ambiguity', () => {
+  const product = (id, name, sku = null) => ({ id, name, sku, units_per_pack: 1 });
+  const match = createMatcher([
+    product(1, 'کابلشو بی متال DTL-2 سایز 120 رادن'),
+    product(2, 'کابلشو بی متال DTL-1 سایز 120 رادن'),
+    product(3, 'کابلشو بی متال DTL-2 سایز 240 رادن'),
+    product(4, 'سیم لخت کن کلاغی مدل 700F رادن'),
+    product(5, 'انبر پرس کابلشو رادن مدل KH38 سایز 14 اینچ'),
+    product(8, 'سیم لخت کن کلاغی مدل 800F رادن')
+  ]);
+  const result = match({ title: 'کابلشو بی متال مدل DTL-1-120 بسته 5 عددی | گارانتی اصالت و سلامت فیزیکی کالا' });
+  assert.equal(result[0].product_id, 2);
+  assert.ok(result.every((x) => x.product_id !== 1 && x.product_id !== 3));
+  assert.ok(match({ title: 'انبر پرس کابلشو رادن مدل KH38 سایز 14 اینچ' }).every((x) => x.product_id !== 4));
+  assert.ok(match({ title: 'سیم لخت کن کلاغی مدل 700F رادن' }).every((x) => x.product_id !== 8));
+  const duplicates = createMatcher([product(6, 'انبر KH38', 'same'), product(7, 'انبر KH38', 'same')]);
+  assert.equal(duplicates({ title: 'انبر KH38', supplier_code: 'same' })[0].confident, false);
 });
