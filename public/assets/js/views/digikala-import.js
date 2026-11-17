@@ -64,6 +64,7 @@ export async function render(view) {
           <span class="field di-units"><label for="di-u-${it.variant_id}">هر فروش چند عدد؟</label><input id="di-u-${it.variant_id}" data-units inputmode="numeric" placeholder="تأیید تعداد" value="${units === '' ? '' : fa(units)}"></span>
         </span>
         <span class="small muted" data-hint></span>
+        <a class="link small" data-site-link target="_blank" rel="noopener noreferrer" hidden>مشاهدهٔ کالا در سایت شرکت ↗</a>
         <details class="di-copy"><summary>مقایسهٔ توضیحات</summary><p>دیجی‌کالا: ${esc(it.description || 'توضیحات در دسترس نیست؛ تطبیق بر اساس نام است.')}</p><p data-site-copy></p></details>
         <div class="form-actions"><button class="btn btn-sm" type="button" data-formula-toggle aria-expanded="false" aria-controls="di-f-${it.variant_id}">+ ضریب قیمت</button></div>
         <div id="di-f-${it.variant_id}" data-formula hidden>
@@ -83,6 +84,13 @@ export async function render(view) {
   function hint(r) {
     const it = item(Number(r.dataset.v));
     const p = productOf(it, Number($('[data-product]', r).value));
+    const link = $('[data-site-link]', r);
+    link.hidden = true;
+    link.removeAttribute('href');
+    try {
+      const url = new URL(p?.permalink);
+      if (['http:', 'https:'].includes(url.protocol)) { link.href = url.href; link.hidden = false; }
+    } catch { /* A missing site URL leaves the link hidden. */ }
     $('[data-site-copy]', r).textContent = `سایت: ${p?.description || 'توضیحات در دسترس نیست؛ سایت را به‌روز کنید.'}`;
     const factor = Number(latin($('[data-multiplier]', r).value));
     const units = Number(latin($('[data-units]', r).value));
@@ -171,7 +179,7 @@ export async function render(view) {
         onPick(p) {
           const vid = Number(r.dataset.v);
           const it = item(vid);
-          const s = { product_id: p.product_id, name: p.name, company_name: p.company_name, currency: p.currency, units_per_pack: p.units_per_pack, regular_price: p.regular_price, description: p.description || '' };
+          const s = { product_id: p.product_id, name: p.name, company_name: p.company_name, currency: p.currency, units_per_pack: p.units_per_pack, regular_price: p.regular_price, permalink: p.permalink, description: p.description || '' };
           extra.set(vid, [...(extra.get(vid) || []).filter((x) => x.product_id !== s.product_id), s]);
           const sel = $('[data-product]', r);
           sel.innerHTML = options(it);

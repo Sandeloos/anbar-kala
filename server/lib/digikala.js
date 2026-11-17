@@ -439,7 +439,7 @@ function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseM
       const k = codeKey(v.supplier_code || '');
       if (k && (k === seller || counts.get(k) > 5)) v.supplier_code = null;
     }
-    const products = db.all(`SELECT p.id, p.name, p.description, p.sku, p.site_status, p.units_per_pack, p.regular_price, p.company_id, c.name AS company_name, c.currency
+    const products = db.all(`SELECT p.id, p.name, p.description, p.permalink, p.sku, p.site_status, p.units_per_pack, p.regular_price, p.company_id, c.name AS company_name, c.currency
                                         FROM products p JOIN companies c ON c.id = p.company_id WHERE p.removed_at IS NULL AND c.active = 1`);
     const match = createMatcher(products);
     const items = fresh.map((v) => ({ ...v, suggestions: match(v) }));
@@ -552,7 +552,7 @@ function createMatcher(products) {
   }
   const view = (p, score, why) => ({
     product_id: p.id, name: p.name, sku: p.sku, company_id: p.company_id, company_name: p.company_name, currency: p.currency,
-    units_per_pack: p.units_per_pack, regular_price: p.regular_price, description: plain(p.description), score: Math.round(score * 100) / 100, why, confident: false
+    units_per_pack: p.units_per_pack, regular_price: p.regular_price, permalink: p.permalink, description: plain(p.description), score: Math.round(score * 100) / 100, why, confident: false
   });
   return (v) => {
     const out = new Map();

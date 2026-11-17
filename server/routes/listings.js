@@ -169,13 +169,13 @@ module.exports = async function listingRoutes(app) {
           stock_status: l.stock_status, platform_price: l.platform_price });
       }
     }
-    const products = db.all(`SELECT p.id, p.name, p.description, p.sku, p.units_per_pack, p.regular_price, p.stock_status, p.stock_quantity, p.company_id, p.configured_at,
+    const products = db.all(`SELECT p.id, p.name, p.description, p.permalink, p.sku, p.units_per_pack, p.regular_price, p.stock_status, p.stock_quantity, p.company_id, p.configured_at,
                                c.name AS company_name, c.currency FROM products p JOIN companies c ON c.id = p.company_id
                              WHERE p.removed_at IS NULL ${toks.map(() => 'AND p.search_text LIKE ?').join(' ')} ${companyId ? 'AND p.company_id = ?' : ''}
                              ORDER BY p.name LIMIT ?`, ...toks.map((t) => `%${t}%`), ...(companyId ? [companyId] : []), out.length ? 8 : 12);
     for (const p of products) {
       out.push({ kind: 'product', id: p.id, product_id: p.id, name: p.name, product_name: p.name, code: p.sku, company_id: p.company_id, company_name: p.company_name,
-        currency: p.currency, description: p.description, units: p.units_per_pack, units_per_pack: p.units_per_pack, regular_price: p.regular_price, stock_status: p.stock_status, configured: !!p.configured_at });
+        currency: p.currency, permalink: p.permalink, description: p.description, units: p.units_per_pack, units_per_pack: p.units_per_pack, regular_price: p.regular_price, stock_status: p.stock_status, configured: !!p.configured_at });
     }
     return { items: out };
   });
