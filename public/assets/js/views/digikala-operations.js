@@ -27,7 +27,7 @@ export async function render(view, ctx) {
   }
   function reference(r) {
     return `<div class="list-item dk-operation-row"><span class="grow"><span class="title">${esc(r.product_name)} · ${esc(r.code)}</span>
-      <span class="sub">${esc(states[r.status] || r.status)} · درخواست ${esc(r.ticket_id || 'هنوز شناسه ندارد')} · قیمت درخواستی ${money(r.target_price)} · ${when(r.updated_at)}</span>
+      <span class="sub">${esc(states[r.status] || r.status)} · درخواست ${esc(r.request_number || r.ticket_id || 'هنوز شناسه ندارد')} · قیمت درخواستی ${money(r.target_price)} · ${when(r.updated_at)}</span>
       ${r.error ? `<span class="sub">${esc(r.error)}</span><a class="link small" href="#/digikala">بررسی تنظیمات تیکت قیمت مرجع</a>` : ''}</span><button class="btn btn-sm" data-reference="${r.id}">${r.status === 'pending' ? 'ارسال درخواست' : 'بررسی وضعیت'}</button></div>`;
   }
   function order(r) {

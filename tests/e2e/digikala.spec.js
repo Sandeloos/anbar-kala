@@ -69,7 +69,7 @@ test('operations shows price reductions, reference tracking and order history on
   const now = new Date().toISOString();
   await page.route('**/api/digikala/operations', (route) => route.fulfill({ json: {
     buybox: [{ listing_id: 1, code: '501', product_name: 'کابل مسی', current_price: 1200000, winning_price: 1150000, suggested_price: 1140000, formula_price: 1300000, is_winner: 0, checked_at: now }],
-    reference: [{ id: 1, code: '502', product_name: 'انبر', target_price: 2000000, ticket_id: '9000', status: 'in_progress', updated_at: now }],
+    reference: [{ id: 1, code: '502', product_name: 'انبر', target_price: 2000000, ticket_id: '9000', request_number: 'P-2627747', status: 'in_progress', updated_at: now }],
     orders: [{ remote_id: '1001', remote_status: 'جاری', order_id: 1, ordered_at: now, updated_at: now, history: [{ status: 'جاری', created_at: now }] }],
     sync: { checked_at: now }
   } }));
@@ -87,7 +87,7 @@ test('operations shows price reductions, reference tracking and order history on
   await expect.poll(() => sent).toBe(true);
   await page.locator('[data-tab="reference"]').click();
   await expect(page.locator('#do-list')).toContainText('در حال بررسی');
-  await expect(page.locator('#do-list')).toContainText('9000');
+  await expect(page.locator('#do-list')).toContainText('P-2627747');
   await page.locator('[data-tab="orders"]').click();
   await expect(page.locator('#do-list')).toContainText('1001');
   await page.locator('#do-list summary').click();

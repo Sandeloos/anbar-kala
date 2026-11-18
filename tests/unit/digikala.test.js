@@ -526,3 +526,23 @@ test('reference form selects the required product branch and refuses incomplete 
   assert.throws(() => referenceForm({ items: fields }, { ...variant, price_type: 'printed' }, 150000), /سازگار/);
   assert.throws(() => referenceForm({ items: fields.slice(1) }, variant, 150000), /شرط/);
 });
+
+test('reference tracking finds internal ids across ticket pages and saves the distinct visible tracking number', async (t) => {
+  const env = await setup(t);
+  const { api, dk, c, product } = env;
+  const target = formulaPrice(product);
+  await connectAndList(env, { variant: { price_list: Math.round(target / 3), price_sale: target - 10000 } });
+  await api.put('/api/digikala/settings', { mode: 'live', ticket_sub_category_id: 77 });
+  await c.digikala.kick();
+  const original = dk.tickets[0];
+  for (let i = 0; i < 60; i++) dk.tickets.push({ id: 100000 + i, status: 'closed' });
+  const start = dk.calls.length;
+  await c.digikala.reference.poll();
+  const record = c.digikala.reference.list()[0];
+  assert.equal(record.status, 'in_progress');
+  assert.equal(record.error, null);
+  assert.equal(record.ticket_id, String(original.id));
+  assert.equal(record.request_number, `P-${original.id + 100000}`);
+  assert.equal(dk.calls.slice(start).filter((r) => r.path === '/tickets/requests').length, 2, 'one shared paged scan');
+  assert.equal(dk.tickets.length, 61, 'status checks do not recreate tickets');
+});

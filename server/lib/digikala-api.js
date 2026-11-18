@@ -143,6 +143,22 @@ function createDigikalaClient({ baseUrl, tokens, fetchImpl, userAgent, timeoutMs
     }
   }
 
+  // Creation returns the internal id. search[request_id] filters a different,
+  // provider-facing number (e.g. P-2627747), so locate internal ids in the paged list.
+  async function ticketsByIds(ids) {
+    const missing = new Set(ids.map(String));
+    const found = [];
+    for (let page = 1; missing.size && page <= 200; page++) {
+      const d = await call('GET', `/tickets/requests?page=${page}&size=50&sort=id&order=desc`);
+      if (!Array.isArray(d?.items)) throw new DigikalaError('فهرست وضعیت تیکت‌های دیجی‌کالا معتبر نیست.');
+      for (const item of d.items) if (missing.delete(String(item.id))) found.push(item);
+      const pages = Number(d.pager?.total_pages);
+      if (!d.items.length || (pages ? page >= pages : d.items.length < 50)) break;
+      if (page === 200 && missing.size) throw new DigikalaError('خواندن فهرست تیکت‌ها کامل نشد؛ دوباره بررسی کنید.');
+    }
+    return found;
+  }
+
   return {
     /** The decrypted code from the self-token page → stores and returns the token pair. */
     async token(authorizationCode) {
@@ -161,7 +177,8 @@ function createDigikalaClient({ baseUrl, tokens, fetchImpl, userAgent, timeoutMs
     ticketCategories: () => call('GET', '/tickets/categories'),
     ticketFields: (subCategoryId) => call('GET', `/tickets/sub-categories/${Number(subCategoryId)}/fields`),
     createTicket: (subCategoryId, form) => call('POST', '/tickets/requests', { sub_category_id: Number(subCategoryId), form }, 0),
-    ticket: async (id) => { const d = await call('GET', `/tickets/requests?search[request_id]=${encodeURIComponent(id)}&size=50`); return d?.items?.find((t) => String(t.id) === String(id)); },
+    ticketsByIds,
+    ticket: async (id) => (await ticketsByIds([id]))[0],
     buyboxSuggestion: (id) => call('GET', `/pricing/buybox/price-suggestion/winning-price?product_variant_id=${Number(id)}`),
     orders: ({ page = 1, size = 50, type, from } = {}) => call('GET', type ? `/orders/history?page=${Number(page)}&size=${Number(size)}&order_type=${encodeURIComponent(type)}&order_created_at_from=${encodeURIComponent(from)}` : `/orders?page=${Number(page)}&size=${Number(size)}&sort=order_created_at&order=desc`)
   };

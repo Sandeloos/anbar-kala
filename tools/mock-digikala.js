@@ -80,7 +80,12 @@ function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3
       return ok(res, { suggested_price: v?.suggested_price ?? null });
     }
     if (req.method === 'GET' && path === '/tickets/requests') {
-      return ok(res, { items: tickets.filter((t) => String(t.id) === url.searchParams.get('search[request_id]')).map((t) => ({ ...t, status: t.status || 'in_progress' })) });
+      const size = Number(url.searchParams.get('size')) || 50;
+      const page = Number(url.searchParams.get('page')) || 1;
+      const filter = url.searchParams.get('search[request_id]');
+      const all = tickets.map((t) => ({ ...t, request_id: `P-${t.id + 100000}`, status: t.status || 'in_progress' }))
+        .filter((t) => !filter || t.request_id === filter).sort((a, b) => b.id - a.id);
+      return ok(res, { items: all.slice((page - 1) * size, page * size), pager: { total_pages: Math.ceil(all.length / size) } });
     }
     if (req.method === 'GET' && path === '/variants') {
       const size = Math.min(100, Number(url.searchParams.get('size')) || 50);

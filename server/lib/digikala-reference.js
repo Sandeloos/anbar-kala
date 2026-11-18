@@ -91,7 +91,7 @@ function createReferenceRequests({ db, client, connection, audit, events }) {
     }
   }
 
-  async function refresh(actor, id) {
+  async function refresh(actor, id, prefetched) {
     const r = db.get('SELECT * FROM dk_reference_requests WHERE id = ?', Number(id));
     if (!r) throw notFound();
     if (r.status === 'pending') {
@@ -100,14 +100,14 @@ function createReferenceRequests({ db, client, connection, audit, events }) {
       const v = await client().variant(Number(String(l.code).replace(/\D/g, '')));
       await submit({ id: r.job_id, listing_id: r.listing_id }, v, r.target_price);
     } else if (r.ticket_id) {
-      const t = await client().ticket(r.ticket_id);
+      const t = prefetched ? prefetched.get(String(r.ticket_id)) : await client().ticket(r.ticket_id);
       const status = typeof t?.status === 'string' ? t.status : t?.status?.title;
       if (!status) throw conflict('وضعیت درخواست در پاسخ دیجی‌کالا مشخص نیست.');
-      db.tx(() => db.run('UPDATE dk_reference_requests SET status = ?, error = NULL, updated_at = ? WHERE id = ?', status, nowIso(), r.id));
+      db.tx(() => db.run('UPDATE dk_reference_requests SET status = ?, request_number = ?, error = NULL, updated_at = ? WHERE id = ?', status, t.request_id || null, nowIso(), r.id));
     } else throw conflict('نتیجهٔ ثبت درخواست نامشخص است؛ برای جلوگیری از تیکت تکراری، ابتدا پنل دیجی‌کالا را بررسی کنید.');
     db.tx(() => {
       const after = db.get('SELECT * FROM dk_reference_requests WHERE id = ?', r.id);
-      const changes = audit.diff(r, after, { status: 'وضعیت', ticket_id: 'شناسهٔ تیکت', error: 'خطا' });
+      const changes = audit.diff(r, after, { status: 'وضعیت', ticket_id: 'شناسهٔ تیکت', request_number: 'شمارهٔ پیگیری دیجی‌کالا', error: 'خطا' });
       if (changes.length) audit(actor, { action: 'digikala', entity: 'listing', id: r.listing_id, summary: `درخواست قیمت مرجع دیجی‌کالا: ${STATUS[after.status] || after.status}`, changes });
       events.emit('digikala', {});
     });
@@ -116,8 +116,17 @@ function createReferenceRequests({ db, client, connection, audit, events }) {
     return result;
   }
   async function poll() {
-    for (const r of db.all("SELECT * FROM dk_reference_requests WHERE status NOT IN ('closed', 'resolved', 'sending', 'uncertain') ORDER BY updated_at LIMIT 20")) {
-      try { await refresh(null, r.id); } catch (err) {
+    const rows = db.all("SELECT * FROM dk_reference_requests WHERE status NOT IN ('closed', 'resolved', 'sending', 'uncertain') ORDER BY updated_at LIMIT 20");
+    let tickets = new Map();
+    let readError = null;
+    try {
+      tickets = new Map((await client().ticketsByIds(rows.filter((r) => r.ticket_id).map((r) => r.ticket_id))).map((t) => [String(t.id), t]));
+    } catch (err) { readError = err; }
+    for (const r of rows) {
+      try {
+        if (r.ticket_id && readError) throw readError;
+        await refresh(null, r.id, tickets);
+      } catch (err) {
         db.tx(() => db.run('UPDATE dk_reference_requests SET error = ?, updated_at = ? WHERE id = ?', err.message, nowIso(), r.id));
       }
     }
