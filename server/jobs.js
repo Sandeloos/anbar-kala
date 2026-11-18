@@ -83,6 +83,7 @@ function createJobs(ctx, log) {
         if (ctx.digikala?.status().connected && Date.now() - lastDigikala > 5 * 60e3) {
           lastDigikala = Date.now();
           await ctx.digikala.orderSync.sync().catch((err) => log.warn({ err: err.message }, 'digikala orders sync failed'));
+          await ctx.digikala.recoverBlocked();
           await ctx.digikala.reference.poll();
           if (Date.now() - lastBuybox > 15 * 60e3) {
             lastBuybox = Date.now();

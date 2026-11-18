@@ -13,8 +13,8 @@
  * admin if the change is above max_change_pct (30 %); in dry-run only records what it would send;
  * otherwise sends the price. When Digikala refuses the price itself (errors.selling_price: outside
  * the reference-price range) it deactivates the variant, sets its seller stock to 0 (remembering
- * the old number), opens a reference-price ticket and marks the listing blocked. An admin turns
- * it back on with one click once the reference price is approved.
+ * the old number), opens a reference-price ticket and marks the listing blocked. The worker
+ * checks the reference price and restores stock and price before reactivating the variant.
  * Every result is written back in one transaction with its audit line.
  *
  * Import: reads every seller variant from Digikala, leaves out those that already have a listing,
@@ -334,31 +334,76 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
     });
   }
 
-  /** The reference price was approved: variant on again, stock back, price sent again. */
-  async function reactivate(actor, listingId, { stock } = {}) {
+  const restoring = new Set();
+
+  async function reactivate(actor, listingId, { stock, automatic = false } = {}) {
     const l = listingRow(listingId);
     if (!l) throw notFound('آگهی پیدا نشد.');
     if (l.dk_state !== 'blocked') throw conflict('این آگهی متوقف نیست.');
+    if (restoring.has(l.id)) throw conflict('فعال‌سازی این آگهی در جریان است.');
     const vid = variantIdOf(l.code);
     const qty = stock ?? l.dk_stock_before ?? 0;
-    if (conn().mode === 'live') {
-      const api = client();
+    const job = db.get("SELECT target_price, reference_price FROM dk_jobs WHERE listing_id = ? AND status = 'rejected' ORDER BY id DESC LIMIT 1", l.id);
+    if (automatic && (!l.active || l.packaging_pending || l.dk_stock_before == null || !(job?.reference_price > 0) || conn().mode !== 'live')) return;
+
+    restoring.add(l.id);
+    try {
+      let price = null;
+      if (conn().mode === 'live') {
+        if (!vid || l.packaging_pending) throw conflict('کد تنوع یا بسته‌بندی آگهی را بررسی کنید.');
+        const api = client();
+        try {
+          const v = await api.variant(vid);
+          if (automatic && (!(Number(v.price_list) > 0) || Number(v.price_list) === job.reference_price)) return;
+
+          const recoveryPrice = (row) => {
+            const f = row.auto_price && priceFor(row, row);
+            return f ? buybox.effectivePrice(row.id, f.price) : job?.target_price;
+          };
+          const checkedListing = () => {
+            const current = listingRow(l.id);
+            if (conn().mode !== 'live' || current?.dk_state !== 'blocked' || current.code !== l.code ||
+                current.product_id !== l.product_id || current.units !== l.units || current.units_per_pack !== l.units_per_pack ||
+                current.active !== l.active || current.packaging_pending || current.dk_stock_before !== l.dk_stock_before) {
+              throw conflict('آگهی یا تنظیمات دیجی‌کالا تغییر کرده است.');
+            }
+            return current;
+          };
+          price = recoveryPrice(checkedListing());
+          if (!(price > 0)) throw conflict('قیمت فروش آگهی مشخص نیست.');
+          if (v.active !== false) await api.setActive(vid, false);
+          await api.setStock(vid, qty);
+          await api.setPrice(vid, price, v.credit_increase_percentage ?? 0);
+          if (recoveryPrice(checkedListing()) !== price) throw conflict('قیمت آگهی هنگام بازیابی تغییر کرد.');
+          await api.setActive(vid, true);
+        } catch (err) {
+          throw badRequest(`دیجی‌کالا فعال‌سازی را نپذیرفت: ${err.message}`);
+        }
+      }
+      db.tx(() => {
+        db.run('UPDATE listings SET dk_state = NULL, dk_stock_before = NULL, platform_price = COALESCE(?, platform_price), updated_at = ? WHERE id = ?', price, nowIso(), l.id);
+        audit(actor, { action: 'update', entity: 'listing', id: l.id, summary: `فعال‌سازی دوباره${automatic ? 'ٔ خودکار' : 'ٔ'} آگهی ${l.code || ''} «${l.product_name}» در دیجی‌کالا با موجودی ${qty}${price === null ? '' : ` و قیمت ${price} ریال`}` });
+        enqueue(l.id, 'reactivated');
+        events.emit('listings', { ids: [l.id] });
+        events.emit('digikala', {});
+      });
+      kick();
+      return listingRow(l.id);
+    } finally {
+      restoring.delete(l.id);
+    }
+  }
+
+  async function recoverBlocked() {
+    if (conn().mode !== 'live') return;
+    const rows = db.all("SELECT id FROM listings WHERE platform_id = ? AND dk_state = 'blocked' AND active = 1", platformId());
+    for (const { id } of rows) {
       try {
-        await api.setActive(vid, true);
-        await api.setStock(vid, qty);
+        await reactivate(null, id, { automatic: true });
       } catch (err) {
-        throw badRequest(`دیجی‌کالا فعال‌سازی را نپذیرفت: ${err.message}`);
+        log.warn({ listing: id, err: err.message }, 'digikala recovery failed');
       }
     }
-    db.tx(() => {
-      db.run('UPDATE listings SET dk_state = NULL, dk_stock_before = NULL, updated_at = ? WHERE id = ?', nowIso(), l.id);
-      audit(actor, { action: 'update', entity: 'listing', id: l.id, summary: `فعال‌سازی دوباره‌ی ${l.code || ''} «${l.product_name}» در دیجی‌کالا با موجودی ${qty}` });
-      enqueue(l.id, 'reactivated');
-      events.emit('listings', { ids: [l.id] });
-      events.emit('digikala', {});
-    });
-    kick();
-    return listingRow(l.id);
   }
 
   /** "Check this listing now" from its page. */
@@ -509,7 +554,7 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
   });
 
   return {
-    reference, buybox, orderSync, status, setKey, connect, setSettings, enqueue, onChanges, handles, kick, processDue, approve, reject, reactivate, reprice, jobs, blocked,
+    reference, buybox, orderSync, status, setKey, connect, setSettings, enqueue, onChanges, handles, kick, processDue, approve, reject, reactivate, recoverBlocked, reprice, jobs, blocked,
     importPreview, importCreate, priceFor, variantIdOf, MODES
   };
 }

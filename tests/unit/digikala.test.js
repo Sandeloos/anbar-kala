@@ -150,7 +150,7 @@ test('live: the price is sent with the panel\'s own credit percentage; a change 
   assert.equal(j.status, 'rejected');
 });
 
-test('refused price: variant off, stock 0, reference-price ticket; nothing more until an admin re-activates', async (t) => {
+test('refused price: wait for a reference change and restore stock and price before automatic activation', async (t) => {
   const env = await setup(t);
   const { api, dk, c, product, sitePrice, ctx } = env;
   const target = formulaPrice(product);
@@ -180,10 +180,22 @@ test('refused price: variant off, stock 0, reference-price ticket; nothing more 
   await c.digikala.kick();
   assert.equal(dk.calls.length, calls);
 
-  // Digikala approved the reference price: one click
+  await c.digikala.recoverBlocked();
+  assert.equal(v.active, false);
+  assert.equal(v.marketplace_seller_stock, 0);
+
+  // A change that still leaves the selling price out of range must not activate the variant.
+  v.price_list += 1;
+  await c.digikala.recoverBlocked();
+  assert.equal(v.active, false);
+  assert.equal(ctx.db.get('SELECT dk_state FROM listings WHERE id = ?', lid).dk_state, 'blocked');
+
   v.price_list = j.target_price;
-  const re = await api.post(`/api/digikala/listings/${lid}/reactivate`);
-  assert.equal(re.status, 200, JSON.stringify(re.body));
+  const recoveryStart = dk.calls.length;
+  await c.digikala.recoverBlocked();
+  assert.deepEqual(dk.calls.slice(recoveryStart).filter((call) => ['PATCH', 'PUT'].includes(call.method)).map((call) => call.path), [
+    '/variants/501/seller-stock', '/variants/selling-price', '/variants/501/activation'
+  ]);
   await c.digikala.kick();
   assert.equal(v.active, true);
   assert.equal(v.marketplace_seller_stock, 7, 'stock restored');

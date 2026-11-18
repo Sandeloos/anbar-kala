@@ -96,7 +96,7 @@ export async function render(view, ctx, params = []) {
           </section>
           <section class="card" aria-labelledby="h-dk-blocked">
             <div class="card-head"><h2 id="h-dk-blocked">متوقف‌شده (${fa(d.blocked.length)})</h2></div>
-            <p class="small muted">دیجی‌کالا قیمت را نپذیرفت (خارج از بازه‌ی قیمت مرجع): تلاش برای غیرفعال‌سازی و صفر کردن موجودی انجام شده؛ نتیجه و وضعیت درخواست را در «پیگیری دیجی‌کالا» ببینید. بعد از تأیید قیمت مرجع، دوباره فعال کنید.</p>
+            <p class="small muted">دیجی‌کالا قیمت را نپذیرفت (خارج از بازه‌ی قیمت مرجع): تلاش برای غیرفعال‌سازی و صفر کردن موجودی انجام شده؛ نتیجه و وضعیت درخواست را در «پیگیری دیجی‌کالا» ببینید. در حالت فعال، سامانه تغییر قیمت مرجع را بررسی می‌کند. پس از بازیابی موجودی و ثبت موفق قیمت فروش، آگهی خودکار فعال می‌شود.</p>
             ${d.blocked.length ? `<div class="list">${d.blocked.map((l) => `<div class="list-item"><span class="grow"><span class="title">${esc(l.product_name)} <span class="ltr small muted">${esc(l.code || '')}</span></span>
               <span class="sub"><span>${esc(l.company_name)}</span><span>موجودی قبلی ${fa(l.dk_stock_before)}</span><span>${ago(l.updated_at)}</span></span></span>
               <button class="btn btn-sm" type="button" data-reactivate="${l.id}" data-stock="${l.dk_stock_before ?? ''}">${icon('refresh')}فعال‌سازی دوباره</button></div>`).join('')}</div>` : empty('check', 'تنوع متوقفی نیست')}
