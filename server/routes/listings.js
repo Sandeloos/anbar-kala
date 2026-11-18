@@ -3,6 +3,7 @@
  * Platforms (Digikala, Basalam, …) and listings: what a platform sells as one item and which
  * company product (and how many units of it) that is. Also the search behind every product picker.
  */
+const { defaultMultiplier, priceUnitsSuggestion } = require('../lib/pricing-defaults');
 const { z, text, optText, intIn, bool, amount } = require('./validate');
 const { nowIso, notFound, conflict, badRequest, searchKey, clampInt, toRial } = require('../lib/util');
 
@@ -31,7 +32,7 @@ module.exports = async function listingRoutes(app) {
   });
 
   /* ------------------------------------------------------------ listings */
-  const COLS = `l.*, pl.name AS platform_name, p.name AS product_name, p.units_per_pack, p.regular_price, p.stock_status, p.stock_quantity, p.permalink,
+  const COLS = `l.*, pl.name AS platform_name, p.name AS product_name, p.units_per_pack, p.sale_pack_units, p.packaging_pending, p.pricing_group, p.category_names, p.regular_price, p.stock_status, p.stock_quantity, p.permalink,
     p.company_id, c.name AS company_name, c.currency`;
   const one = (id) => {
     const l = db.get(`SELECT ${COLS} FROM listings l JOIN platforms pl ON pl.id = l.platform_id JOIN products p ON p.id = l.product_id
@@ -56,7 +57,7 @@ module.exports = async function listingRoutes(app) {
                  ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`;
     const total = db.get(`SELECT COUNT(*) AS n ${sql}`, ...params).n;
     const items = db.all(`SELECT ${COLS} ${sql} ORDER BY l.active DESC, l.updated_at DESC LIMIT ? OFFSET ?`, ...params, per, (page - 1) * per);
-    return { items, total, page, pages: Math.max(1, Math.ceil(total / per)) };
+    return { items: items.map((l) => ({ ...l, default_multiplier: defaultMultiplier({ ...l, name: l.product_name }), margin_pct: l.margin_default ? Math.round((defaultMultiplier({ ...l, name: l.product_name }) - 1) * 10000) / 100 : l.margin_pct })), total, page, pages: Math.max(1, Math.ceil(total / per)) };
   });
 
   const listingBody = z.object({
@@ -74,13 +75,13 @@ module.exports = async function listingRoutes(app) {
       z.number({ error: 'حاشیه‌ی سود باید عدد باشد.' }).min(-50, 'حاشیه‌ی سود خیلی کم است.').max(1000, 'حاشیه‌ی سود خیلی زیاد است.').nullable()).optional(),
     fixed_add: z.preprocess((v) => (v === '' || v === null || v === undefined ? null : v), amount('مبلغ ثابت').nullable()).optional(),
     round_to: z.preprocess((v) => (v === '' || v === null || v === undefined ? null : v), amount('گرد کردن').nullable()).optional()
-  }).refine((b) => !b.auto_price || (b.margin_pct !== null && b.margin_pct !== undefined), { message: 'برای قیمت‌گذاری خودکار حاشیه‌ی سود را وارد کنید.', path: ['margin_pct'] });
+  });
 
   /** Form amounts (tomans) → stored rials; omitted fields keep their value. */
   function formula(b, before = {}) {
     const keep = (k, v) => (v === undefined ? before[k] : v);
     return {
-      auto_price: b.auto_price === undefined ? before.auto_price || 0 : b.auto_price ? 1 : 0,
+      auto_price: b.auto_price === undefined ? before.auto_price ?? 0 : b.auto_price ? 1 : 0,
       margin_pct: keep('margin_pct', b.margin_pct) ?? null,
       fixed_add: b.fixed_add === undefined ? before.fixed_add || 0 : toRial(b.fixed_add || 0, 'toman'),
       round_to: b.round_to === undefined ? before.round_to || 10000 : Math.max(1, toRial(b.round_to || 0, 'toman') || 10000)
@@ -102,11 +103,13 @@ module.exports = async function listingRoutes(app) {
     checkCode(b.platform_id, b.code);
     const now = nowIso();
     const price = b.platform_price === null || b.platform_price === undefined ? null : toRial(b.platform_price, 'toman');
-    const fx = formula(b);
+    const dk = db.get('SELECT code FROM platforms WHERE id = ?', b.platform_id).code === 'digikala';
+    const fx = formula({ ...b, auto_price: b.auto_price ?? dk, margin_pct: b.margin_pct ?? (dk ? Math.round((defaultMultiplier(p) - 1) * 10000) / 100 : null) });
     const l = db.tx(() => {
       const id = Number(db.run(`INSERT INTO listings (platform_id, product_id, code, title, units, platform_price, note, search_text, auto_price, margin_pct, fixed_add, round_to, created_at, updated_at)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       b.platform_id, b.product_id, b.code ?? null, b.title ?? null, b.units, price, b.note ?? null, search(b, p), fx.auto_price, fx.margin_pct, fx.fixed_add, fx.round_to, now, now).lastInsertRowid);
+      if (dk && b.margin_pct == null) db.run('UPDATE listings SET margin_default = 1 WHERE id = ?', id);
       if (fx.auto_price && digikala.enqueue(id, 'formula')) db.afterCommit(digikala.kick);
       const row = one(id);
       audit(req, { action: 'create', entity: 'listing', id, summary: `افزودن آگهی ${row.platform_name}${row.code ? ` (${row.code})` : ''} برای «${p.name}» — هر فروش ${b.units} عدد از ${p.units_per_pack}` });
@@ -128,12 +131,13 @@ module.exports = async function listingRoutes(app) {
     const pname = (pid) => (db.get('SELECT name FROM platforms WHERE id = ?', pid) || {}).name;
     const prname = (pid) => (db.get('SELECT name FROM products WHERE id = ?', pid) || {}).name;
     const label = (r) => ({ ...r, platform: pname(r.platform_id), product: prname(r.product_id), active: r.active ? 'بله' : 'خیر', auto: auto(r) });
+    if (b.margin_pct !== undefined && b.margin_pct !== null) after.margin_default = 0;
     const changes = audit.diff(label(before), label(after), FIELDS);
     if (changes.length) db.tx(() => {
       db.run(`UPDATE listings SET platform_id = ?, product_id = ?, code = ?, title = ?, units = ?, platform_price = ?, note = ?, active = ?, search_text = ?,
-              auto_price = ?, margin_pct = ?, fixed_add = ?, round_to = ?, updated_at = ?, version = version + 1 WHERE id = ? AND version = ?`,
+              auto_price = ?, margin_pct = ?, margin_default = ?, fixed_add = ?, round_to = ?, updated_at = ?, version = version + 1 WHERE id = ? AND version = ?`,
       after.platform_id, after.product_id, after.code, after.title, after.units, after.platform_price, after.note, after.active, search(after, p),
-      after.auto_price, after.margin_pct, after.fixed_add, after.round_to, nowIso(), before.id, before.version).changes || concurrency.stale(one(before.id), { entity: 'listing', label: 'این آگهی' });
+      after.auto_price, after.margin_pct, after.margin_default, after.fixed_add, after.round_to, nowIso(), before.id, before.version).changes || concurrency.stale(one(before.id), { entity: 'listing', label: 'این آگهی' });
       // A new formula (or turning it on) is checked against Digikala right away
       if (FORMULA.some((k) => String(before[k]) !== String(after[k])) && digikala.enqueue(before.id, 'formula')) db.afterCommit(digikala.kick);
       audit(req, { action: 'update', entity: 'listing', id: before.id, summary: `ویرایش آگهی ${after.code || ''} «${p.name}»`, changes });
@@ -169,13 +173,13 @@ module.exports = async function listingRoutes(app) {
           stock_status: l.stock_status, platform_price: l.platform_price });
       }
     }
-    const products = db.all(`SELECT p.id, p.name, p.description, p.permalink, p.sku, p.units_per_pack, p.regular_price, p.stock_status, p.stock_quantity, p.company_id, p.configured_at,
+    const products = db.all(`SELECT p.id, p.name, p.description, p.permalink, p.sku, p.units_per_pack, p.sale_pack_units, p.packaging_pending, p.pricing_group, p.category_names, p.regular_price, p.stock_status, p.stock_quantity, p.company_id, p.configured_at,
                                c.name AS company_name, c.currency FROM products p JOIN companies c ON c.id = p.company_id
                              WHERE p.removed_at IS NULL ${toks.map(() => 'AND p.search_text LIKE ?').join(' ')} ${companyId ? 'AND p.company_id = ?' : ''}
                              ORDER BY p.name LIMIT ?`, ...toks.map((t) => `%${t}%`), ...(companyId ? [companyId] : []), out.length ? 8 : 12);
     for (const p of products) {
       out.push({ kind: 'product', id: p.id, product_id: p.id, name: p.name, product_name: p.name, code: p.sku, company_id: p.company_id, company_name: p.company_name,
-        currency: p.currency, permalink: p.permalink, description: p.description, units: p.units_per_pack, units_per_pack: p.units_per_pack, regular_price: p.regular_price, stock_status: p.stock_status, configured: !!p.configured_at });
+        currency: p.currency, permalink: p.permalink, description: p.description, units: p.sale_pack_units || p.units_per_pack, units_per_pack: p.units_per_pack, sale_pack_units: p.sale_pack_units || p.units_per_pack, default_multiplier: defaultMultiplier(p), units_estimate: priceUnitsSuggestion({ price_sale: Number(req.query.variant_price) }, p), regular_price: p.regular_price, stock_status: p.stock_status, configured: !!p.configured_at });
     }
     return { items: out };
   });

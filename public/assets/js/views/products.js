@@ -74,8 +74,8 @@ async function renderList(view, ctx) {
         ${p.sale_price ? `<div class="small muted">با تخفیف ${moneyText(p.sale_price, p.currency)}</div>` : ''}
         ${p.price_source === 'manual' ? '<div><span class="badge badge-orange">ثبت دستی</span></div>' : ''}</td>
       <td data-label="موجودی سایت">${stockBadge(p)}</td>
-      <td data-label="تعداد در بسته"><input class="pack-input" type="text" inputmode="numeric" value="${fa(p.units_per_pack)}" data-pack aria-label="تعداد در هر بسته‌ی ${esc(p.name)}" title="هر بار فروش این کالا چند عدد است؟ (Enter: ذخیره و رفتن به ردیف بعد)">
-        ${!p.configured_at && p.units_guessed ? '<div class="small muted">از روی نام</div>' : ''}</td>
+      <td data-label="مبنای قیمت"><input class="pack-input" type="text" inputmode="numeric" value="${fa(p.units_per_pack)}" data-pack aria-label="قیمت برای چند عدد ${esc(p.name)}" title="قیمت سایت برای چند عدد است؟ (Enter: ذخیره و رفتن به ردیف بعد)">
+        ${!p.configured_at && p.units_guessed ? '<div class="small muted">از روی نام</div>' : ''}<div class="small muted">بستهٔ فروش: ${fa(p.sale_pack_units || p.units_per_pack)} عدد</div>${p.packaging_pending ? '<a class="link small" href="#/digikala/packaging">تأیید دوبارهٔ بسته‌بندی</a>' : ''}</td>
       <td data-label="آخرین تغییر" class="hide-sm">${when(p.last_changed_at)}</td>
       <td class="col-actions">${!p.configured_at ? `<button class="btn btn-sm btn-soft" type="button" data-confirm title="تعداد در بسته درست است؛ تأیید کن">${icon('check')}تأیید</button>` : ''}
         ${p.permalink ? `<a class="icon-btn sm" href="${esc(p.permalink)}" target="_blank" rel="noopener noreferrer" aria-label="دیدن در سایت شرکت" title="دیدن در سایت شرکت">${icon('external')}</a>` : ''}</td>
@@ -413,9 +413,12 @@ async function renderOne(view, ctx, id) {
           <section class="card" aria-labelledby="h-set">
             <div class="card-head"><div><h2 id="h-set">تنظیمات این کالا در انبار</h2><p>${p.configured_at ? `تأییدشده ${esc(ago(p.configured_at))}` : '<span class="badge badge-orange">منتظر تنظیم</span>'}</p></div></div>
             <form class="form" id="f-set" novalidate>
-              <div class="field"><label for="s-pack">هر بار فروش این کالا چند عدد است؟</label>
+              <div class="field"><label for="s-pack">قیمت سایت برای چند عدد است؟</label>
                 <div class="input-suffix"><input id="s-pack" name="units_per_pack" inputmode="numeric" value="${fa(p.units_per_pack)}" required><span>عدد</span></div>
-                <span class="hint">مثلاً اگر این کالا «بسته‌ی ۱۰۰ عددی» است، ۱۰۰. برای حساب کردن فروش بخشی از بسته (مثلاً ۲۵ تا از ۱۰۰ تا) لازم است.</span></div>
+                <span class="hint">اگر قیمت نمایش‌داده‌شده در سایت برای یک عدد است، ۱؛ اگر قیمت کل بستهٔ ۱۰۰تایی است، ۱۰۰.</span></div>
+              <div class="field"><label for="s-sale-pack">در بستهٔ فروش سایت چند عدد است؟</label><input id="s-sale-pack" name="sale_pack_units" inputmode="numeric" value="${fa(p.sale_pack_units || p.units_per_pack)}"><span class="hint">این تعداد مستقل از مبنای قیمت است؛ مثلاً قیمت یک عدد و فروش بستهٔ ۱۰۰تایی.</span></div>
+              <div class="field"><label for="s-group">گروه ضریب پیش‌فرض</label><select id="s-group" name="pricing_group"><option value="">تشخیص خودکار از دسته و نام</option><option value="tools"${p.pricing_group === 'tools' ? ' selected' : ''}>ابزار (۱٫۴)</option><option value="other"${p.pricing_group === 'other' ? ' selected' : ''}>غیرابزار (۱٫۵)</option></select></div>
+              ${p.packaging_pending ? '<p class="callout callout-warn">بسته‌بندی تغییر کرده؛ ابتدا <a class="link" href="#/digikala/packaging">بررسی بسته‌بندی</a> را تأیید کنید.</p>' : ''}
               <div class="field"><label for="s-wh">اگر اضافه آمد، به کدام انبار برود؟</label>
                 <select id="s-wh" name="warehouse_id"><option value="">پیش‌فرض شرکت (${esc(companyWh ? companyWh.name : '—')})</option>
                 ${warehouses.filter((w) => w.active || w.id === p.warehouse_id).map((w) => `<option value="${w.id}"${w.id === p.warehouse_id ? ' selected' : ''}>${esc(w.name)}</option>`).join('')}</select></div>
@@ -427,7 +430,7 @@ async function renderOne(view, ctx, id) {
           <section class="card" aria-labelledby="h-lst"><div class="card-head"><h2 id="h-lst">آگهی‌ها و موجودی انبار</h2><a class="btn btn-sm btn-ghost" href="#/listings?q=${encodeURIComponent(p.name)}">آگهی‌ها</a></div>
             ${d.listings.length ? `<div class="list">${d.listings.map((l) => `<div class="list-item" style="padding-inline:0"><span class="grow"><span class="title">${esc(l.title || p.name)}</span>
               <span class="sub"><span class="badge badge-blue">${esc(l.platform_name)}</span>${l.code ? `<span class="ltr">${esc(l.code)}</span>` : ''}${l.active ? '' : '<span class="badge">غیرفعال</span>'}</span></span>
-              <span class="small">${l.units === p.units_per_pack ? 'کل بسته' : `${fa(l.units)} از ${fa(p.units_per_pack)} عدد`}</span></div>`).join('')}</div>`
+              <span class="small">${l.units === (p.sale_pack_units || p.units_per_pack) ? 'کل بستهٔ فروش' : `${fa(l.units)} عدد در هر فروش`}</span></div>`).join('')}</div>`
               : '<p class="small muted">هنوز آگهی‌ای به این کالا وصل نیست.</p>'}
             ${d.stock.length ? `<dl class="kv" style="margin-top:8px">${d.stock.map((s) => `<div><dt>${esc(s.warehouse_name)} · ${s.owner_company_id ? `مال ${esc(s.owner_name)}` : 'خودمان'}</dt><dd>${fa(s.units)} عدد</dd></div>`).join('')}</dl>`
               : '<p class="small muted" style="margin-top:8px">در انبارهای ما موجودی ندارد.</p>'}
@@ -473,12 +476,12 @@ async function renderOne(view, ctx, id) {
     e.preventDefault();
     const f = e.target;
     const v = formValues(f);
-    const n = Number(latin(v.units_per_pack).replace(/[,،\s]/g, ''));
+    const n = Number(latin(v.units_per_pack).replace(/[,،٬\s]/g, ''));
     if (!Number.isInteger(n) || n < 1) { fieldErrors(f, { units_per_pack: 'عدد صحیح ۱ یا بیشتر وارد کنید.' }); return; }
     const btn = $('button[type=submit]', f);
     busy(btn, true);
     try {
-      d = await put(`/products/${id}`, { ...v, units_per_pack: n }, { version: d.product.version });
+      d = await put(`/products/${id}`, { ...v, units_per_pack: n, sale_pack_units: latin(v.sale_pack_units), pricing_group: v.pricing_group || null }, { version: d.product.version });
       paint();
       toast('تنظیمات کالا ذخیره شد.');
       ctx.refreshCounts();

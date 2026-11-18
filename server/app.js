@@ -18,7 +18,8 @@ const { createAudit } = require('./lib/audit');
 const { createEvents } = require('./lib/events');
 const { createSecrets } = require('./lib/secrets');
 const { createSettings } = require('./lib/settings');
-const { createSync } = require('./lib/sync');
+const { createPackaging } = require('./lib/packaging');
+const { createSync, guessUnits } = require('./lib/sync');
 const { createStock } = require('./lib/stock');
 const { createOrders } = require('./lib/orders');
 const { createReturns } = require('./lib/returns');
@@ -73,17 +74,22 @@ async function buildApp(config, { logger, fetchImpl } = {}) {
   const secrets = createSecrets(config.secret);
   const settings = createSettings(db);
   const audit = createAudit(db, events, { strict: !config.production, onLoose: (err) => app.log.error({ err }, 'audit outside a transaction') });
-  const sync = createSync({ db, config, secrets, events, log: app.log, fetchImpl, metrics });
+  const packaging = createPackaging({ db, audit, events, guessUnits });
+  const sync = createSync({ packaging, db, config, secrets, events, log: app.log, fetchImpl, metrics });
   const stock = createStock({ db, audit, events });
-  const orders = createOrders({ db, sync, events, audit, stock });
+  const orders = createOrders({ packaging, db, sync, events, audit, stock });
   const returns = createReturns({ db, orders, stock, events, audit });
   const statements = createStatements({ db, audit, events });
   const digikala = createDigikala({ db, secrets, audit, events, orders, log: app.log, fetchImpl, retryBaseMs: config.production ? 1000 : 20 });
   const tasks = createTasks({ db, events, audit, settings, autoPriced: digikala.handles });
+  packaging.onConfirmed((id) => {
+    for (const l of db.all('SELECT id FROM listings WHERE product_id = ? AND auto_price = 1', id)) digikala.enqueue(l.id, 'packaging');
+    db.afterCommit(digikala.kick);
+  });
   sync.onChanges(tasks.onChanges);
   sync.onChanges(digikala.onChanges);
   const ctx = {
-    config, db, events, secrets, settings, audit, sync, stock, orders, returns, statements, tasks, digikala, metrics,
+    packaging, config, db, events, secrets, settings, audit, sync, stock, orders, returns, statements, tasks, digikala, metrics,
     backups: createBackups({ db, config }),
     auth: createAuth({ db, config }),
     limit: createLimiter({ factor: config.relaxLimits ? 100 : 1 }),

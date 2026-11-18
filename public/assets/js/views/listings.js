@@ -40,7 +40,7 @@ export async function render(view, ctx) {
       <tbody>${data.items.map((l, i) => `<tr data-i="${i}">
         <td class="cell-main"><div class="cell-title"><strong>${esc(l.title || l.product_name)}</strong><div class="cell-meta"><span class="badge badge-blue">${esc(l.platform_name)}</span>${l.code ? `<span class="ltr">${esc(l.code)}</span>` : ''}${l.active ? '' : '<span class="badge">غیرفعال</span>'}</div></div></td>
         <td data-label="کالای سایت"><a class="link" href="#/products/${l.product_id}">${esc(l.product_name)}</a><div class="small muted">${esc(l.company_name)}</div></td>
-        <td class="col-num" data-label="هر فروش">${fa(l.units)} عدد${l.units !== l.units_per_pack ? `<div><span class="badge badge-orange">${fa(l.units)} از ${fa(l.units_per_pack)}</span></div>` : ''}</td>
+        <td class="col-num" data-label="هر فروش">${fa(l.units)} عدد${l.units !== l.units_per_pack ? `<div><span class="badge badge-orange">مبنای قیمت سایت: ${fa(l.units_per_pack)} عدد</span></div>` : ''}</td>
         <td class="col-num" data-label="ارزش هر فروش"><span class="price">${money(l.regular_price === null ? null : Math.round((l.regular_price * l.units) / l.units_per_pack), l.currency)}</span>
           ${l.platform_price ? `<div class="small muted">در پلتفرم: ${moneyText(l.platform_price, 'toman')}</div>` : ''}</td>
         <td class="col-actions"><button class="btn btn-sm" type="button" data-edit>${icon('edit')}ویرایش</button></td></tr>`).join('')}</tbody></table></div>
@@ -58,7 +58,7 @@ export async function render(view, ctx) {
     const body = openSheet(l ? 'ویرایش آگهی' : 'آگهی جدید', `<form class="form" id="f-li" novalidate>
       <div class="field"><label for="li-platform">پلتفرم</label><select id="li-platform" name="platform_id">${platforms.filter((p) => p.active || (l && p.id === l.platform_id)).map((p) => `<option value="${p.id}"${(l ? l.platform_id : Number(f.platform) || platforms[0].id) === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>
       <div class="picker"><label class="field-label" for="li-pick">کالای سایت شرکت</label><div class="search">${icon('search')}<input id="li-pick" type="search" placeholder="جستجوی کالا…"></div></div>
-      <div id="li-chosen">${l ? `<div class="callout callout-info small">${icon('box')}<span>${esc(l.product_name)} — ${esc(l.company_name)} (${fa(l.units_per_pack)} عدد در هر بسته)</span></div>` : ''}</div>
+      <div id="li-chosen">${l ? `<div class="callout callout-info small">${icon('box')}<span>${esc(l.product_name)} — ${esc(l.company_name)} (قیمت برای ${fa(l.units_per_pack)} عدد، بستهٔ فروش ${fa(l.sale_pack_units || l.units_per_pack)} عدد)</span></div>` : ''}</div>
       <div class="form-row cols-2">
         <div class="field"><label for="li-code">کد در پلتفرم</label><input id="li-code" name="code" dir="ltr" value="${esc(l ? l.code || '' : '')}" placeholder="مثلاً DKPC-123"></div>
         <div class="field"><label for="li-units">هر فروش چند عدد است؟</label><input id="li-units" name="units" inputmode="numeric" value="${l ? fa(l.units) : ''}"><span class="hint" id="li-units-hint"></span></div>
@@ -68,9 +68,9 @@ export async function render(view, ctx) {
       <div class="field"><label for="li-note">یادداشت</label><input id="li-note" name="note" value="${esc(l ? l.note || '' : '')}"></div>
       <div id="li-dk" class="dk-formula"${isDk(l ? l.platform_id : Number(f.platform) || platforms[0].id) ? '' : ' hidden'}>
         <h3 class="fieldset-title">قیمت‌گذاری خودکار دیجی‌کالا</h3>
-        <label class="switch"><span><strong>قیمت این آگهی خودکار تنظیم شود</strong><small>با تغییر قیمت سایت شرکت، قیمت دیجی‌کالا با فرمول همین بسته‌بندی عوض می‌شود. کد در پلتفرم باید کد تنوع (DKPC) باشد.</small></span><input type="checkbox" name="auto_price" ${l && l.auto_price ? 'checked' : ''}><i></i></label>
+        <label class="switch"><span><strong>قیمت این آگهی خودکار تنظیم شود</strong><small>با تغییر قیمت سایت شرکت، قیمت دیجی‌کالا با فرمول همین بسته‌بندی عوض می‌شود. کد در پلتفرم باید کد تنوع (DKPC) باشد.</small></span><input type="checkbox" name="auto_price" ${!l || l.auto_price ? 'checked' : ''}><i></i></label>
         <div class="form-row cols-3">
-          <div class="field"><label for="li-margin">حاشیه‌ی سود (٪)</label><input id="li-margin" name="margin_pct" inputmode="decimal" value="${l && l.margin_pct !== null && l.margin_pct !== undefined ? fa(l.margin_pct) : ''}" placeholder="مثلاً ۳۰"></div>
+          <div class="field"><label for="li-margin">حاشیه‌ی سود (٪)</label><input id="li-margin" name="margin_pct" inputmode="decimal" value="${l && l.margin_pct !== null && l.margin_pct !== undefined ? fa(l.margin_pct) : '۵۰'}" placeholder="مثلاً ۳۰"></div>
           <div class="field"><label for="li-fixed">مبلغ ثابت اضافه (تومان)</label><input id="li-fixed" name="fixed_add" inputmode="numeric" value="${l && l.fixed_add ? fa(inCurrency(l.fixed_add, 'toman')) : ''}" placeholder="اختیاری"></div>
           <div class="field"><label for="li-round">گرد کردن به بالا (تومان)</label><input id="li-round" name="round_to" inputmode="numeric" value="${fa(inCurrency(l && l.round_to ? l.round_to : 10000, 'toman'))}"></div>
         </div>
@@ -80,7 +80,7 @@ export async function render(view, ctx) {
       ${l ? `<label class="switch"><span><strong>فعال</strong><small>آگهی غیرفعال در جستجوی ثبت سفارش نمی‌آید.</small></span><input type="checkbox" name="active" ${l.active ? 'checked' : ''}><i></i></label>` : ''}
       <div class="form-actions"><button class="btn btn-primary" type="submit">ذخیره</button></div></form>`);
     const form = $('#f-li', body);
-    let product = l ? { product_id: l.product_id, units_per_pack: l.units_per_pack, regular_price: l.regular_price } : null;
+    let product = l ? { product_id: l.product_id, units_per_pack: l.units_per_pack, sale_pack_units: l.sale_pack_units, regular_price: l.regular_price, default_multiplier: l.default_multiplier } : null;
     const num = (v) => Number(latin(String(v || '')).replace(/[,،٬\s٪%]/g, ''));
     /** Live preview of the formula, the same arithmetic as the server (lib/digikala.js priceFor). */
     const preview = () => {
@@ -97,15 +97,16 @@ export async function render(view, ctx) {
     };
     form.addEventListener('input', preview);
     form.elements.platform_id.addEventListener('change', preview);
-    const hint = () => { $('#li-units-hint', body).textContent = product ? `بسته‌ی کامل این کالا ${product.units_per_pack} عدد است.` : ''; };
+    const hint = () => { $('#li-units-hint', body).textContent = product ? `قیمت سایت برای ${fa(product.units_per_pack)} عدد؛ بستهٔ فروش ${fa(product.sale_pack_units || product.units_per_pack)} عدد است.` : ''; };
     hint();
     preview();
     createPicker($('#li-pick', body), {
       params: () => ({ products_only: 1 }),
       onPick(it) {
         product = it;
-        $('#li-chosen', body).innerHTML = `<div class="callout callout-info small">${icon('box')}<span>${esc(it.name)} — ${esc(it.company_name)} (${fa(it.units_per_pack)} عدد در هر بسته)</span></div>`;
-        if (!form.elements.units.value) form.elements.units.value = fa(it.units_per_pack);
+        if (!l) form.elements.margin_pct.value = fa(((it.default_multiplier || 1.5) - 1) * 100);
+        $('#li-chosen', body).innerHTML = `<div class="callout callout-info small">${icon('box')}<span>${esc(it.name)} — ${esc(it.company_name)} (قیمت برای ${fa(it.units_per_pack)} عدد، بستهٔ فروش ${fa(it.sale_pack_units || it.units_per_pack)} عدد)</span></div>`;
+        if (!form.elements.units.value) form.elements.units.value = fa(it.sale_pack_units || it.units_per_pack);
         if (!form.elements.title.value) form.elements.title.value = it.name;
         hint();
         preview();

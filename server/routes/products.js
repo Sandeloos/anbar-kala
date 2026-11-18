@@ -6,6 +6,7 @@
  * price/stock changes.
  */
 const { z, optText, intIn, amount, bool, isoTime, text } = require('./validate');
+const { defaultMultiplier } = require('../lib/pricing-defaults');
 const { searchKey, nowIso, notFound, badRequest, clampInt, toRial, toLatinDigits } = require('../lib/util');
 
 const SORTS = {
@@ -15,14 +16,14 @@ const SORTS = {
   stock: 'p.stock_quantity',
   company: 'c.name, p.name'
 };
-const SETTING_FIELDS = { units_per_pack: 'تعداد در هر بسته', warehouse: 'انبار اضافه‌ها', tracked: 'پیگیری', note: 'یادداشت' };
+const SETTING_FIELDS = { units_per_pack: 'قیمت سایت برای چند عدد', sale_pack_units: 'عدد در بستهٔ فروش', pricing_group: 'گروه ضریب قیمت', warehouse: 'انبار اضافه‌ها', tracked: 'پیگیری', note: 'یادداشت' };
 
 module.exports = async function productRoutes(app) {
-  const { db, audit, sync, concurrency } = app.ctx;
+  const { db, audit, sync, concurrency, packaging } = app.ctx;
 
   const COLS = `p.id, p.company_id, p.woo_id, p.parent_woo_id, p.type, p.name, p.parent_name, p.attributes, p.sku, p.permalink,
     p.site_status, p.regular_price, p.sale_price, p.stock_status, p.stock_quantity, p.manage_stock, p.price_source,
-    p.units_per_pack, p.units_guessed, p.warehouse_id, p.tracked, p.note, p.configured_at, p.last_checked_at, p.last_changed_at, p.removed_at,
+    p.units_per_pack, p.sale_pack_units, p.packaging_pending, p.pricing_group, p.category_names, p.units_guessed, p.warehouse_id, p.tracked, p.note, p.configured_at, p.last_checked_at, p.last_changed_at, p.removed_at,
     p.site_modified_at, p.version, c.name AS company_name, c.currency, c.warehouse_id AS company_warehouse_id`;
 
   function filters(q) {
@@ -36,7 +37,7 @@ module.exports = async function productRoutes(app) {
     if (q.setup === 'todo') where.push('p.configured_at IS NULL');
     if (q.setup === 'done') where.push('p.configured_at IS NOT NULL');
     if (q.setup === 'guessed') where.push('p.configured_at IS NULL AND p.units_guessed = 1');
-    if (q.packs === 'multi') where.push('p.units_per_pack > 1');
+    if (q.packs === 'multi') where.push('COALESCE(p.sale_pack_units, p.units_per_pack) > 1');
     if (q.changed === '24h' || q.changed === '7d') {
       where.push('p.last_changed_at >= ?');
       params.push(new Date(Date.now() - (q.changed === '24h' ? 1 : 7) * 864e5).toISOString());
@@ -92,26 +93,33 @@ module.exports = async function productRoutes(app) {
       ? db.all(`SELECT id, name, attributes, regular_price, stock_status, units_per_pack FROM products
                 WHERE company_id = ? AND parent_woo_id = ? AND id <> ? AND removed_at IS NULL ORDER BY woo_id`, p.company_id, p.parent_woo_id, p.id)
       : [];
-    const listings = db.all(`SELECT l.id, l.code, l.title, l.units, l.active, pl.name AS platform_name FROM listings l JOIN platforms pl ON pl.id = l.platform_id
+    const listings = db.all(`SELECT l.*, pl.name AS platform_name FROM listings l JOIN platforms pl ON pl.id = l.platform_id
                              WHERE l.product_id = ? ORDER BY l.active DESC, pl.sort`, p.id);
     const stock = db.all(`SELECT m.warehouse_id, m.owner_company_id, SUM(m.units) AS units, w.name AS warehouse_name, oc.name AS owner_name
                           FROM stock_moves m JOIN warehouses w ON w.id = m.warehouse_id LEFT JOIN companies oc ON oc.id = m.owner_company_id
                           WHERE m.product_id = ? GROUP BY m.warehouse_id, m.owner_company_id HAVING SUM(m.units) <> 0`, p.id);
-    return { product: p, history, activity, siblings, listings, stock };
+    return { product: { ...p, default_multiplier: defaultMultiplier(p) }, history, activity, siblings, listings, stock };
   }
 
   app.get('/products/:id', async (req) => detail(req.params.id));
 
   const warehouseLabel = (id) => (id ? (db.get('SELECT name FROM warehouses WHERE id = ?', id) || {}).name : 'پیش‌فرض شرکت');
   function saveSettings(req, before, values) {
+    if (before.packaging_pending) throw badRequest('ابتدا بسته‌بندی و تطبیق آگهی‌های این کالا را از «بررسی بسته‌بندی» تأیید کنید.');
     const after = { ...before, ...values };
-    const label = (r) => ({ ...r, warehouse: warehouseLabel(r.warehouse_id), tracked: r.tracked ? 'بله' : 'خیر' });
+    after.sale_pack_units = values.sale_pack_units ?? (before.sale_pack_units == null || before.sale_pack_units === before.units_per_pack ? after.units_per_pack : before.sale_pack_units);
+    const label = (r) => ({ ...r, sale_pack_units: r.sale_pack_units || r.units_per_pack, warehouse: warehouseLabel(r.warehouse_id), tracked: r.tracked ? 'بله' : 'خیر' });
     const changes = audit.diff(label(before), label(after), SETTING_FIELDS);
     const now = nowIso();
     db.tx(() => {
-    db.run(`UPDATE products SET units_per_pack = ?, warehouse_id = ?, tracked = ?, note = ?, units_guessed = 0, configured_at = COALESCE(configured_at, ?), updated_at = ?,
-              version = version + 1 WHERE id = ? AND version = ?`, after.units_per_pack, after.warehouse_id, after.tracked ? 1 : 0, after.note, now, now, before.id, before.version).changes ||
+    db.run(`UPDATE products SET units_per_pack = ?, sale_pack_units = ?, pricing_group = ?, warehouse_id = ?, tracked = ?, note = ?, units_guessed = 0, configured_at = COALESCE(configured_at, ?), updated_at = ?,
+              version = version + 1 WHERE id = ? AND version = ?`, after.units_per_pack, after.sale_pack_units, after.pricing_group, after.warehouse_id, after.tracked ? 1 : 0, after.note, now, now, before.id, before.version).changes ||
       concurrency.stale(db.get('SELECT * FROM products WHERE id = ?', before.id), { entity: 'product', label: 'این کالا' });
+    packaging.recordBasis(before, after);
+    if (before.pricing_group !== after.pricing_group) {
+      for (const l of db.all('SELECT id FROM listings WHERE product_id = ? AND auto_price = 1', before.id)) app.ctx.digikala.enqueue(l.id, 'formula');
+      db.afterCommit(app.ctx.digikala.kick);
+    }
     if (changes.length || !before.configured_at) {
       audit(req, {
         action: 'update', entity: 'product', id: before.id,
@@ -130,7 +138,9 @@ module.exports = async function productRoutes(app) {
     if (!before) throw notFound('کالا پیدا نشد.');
     concurrency.check(req, before, { entity: 'product', label: 'این کالا' });
     const body = z.object({
-      units_per_pack: intIn('تعداد در هر بسته', 1, 100000),
+      units_per_pack: intIn('قیمت سایت برای چند عدد', 1, 100000),
+      sale_pack_units: intIn('عدد در بستهٔ فروش', 1, 100000).optional(),
+      pricing_group: z.enum(['tools', 'other']).nullable().optional(),
       warehouse_id: warehouseId,
       tracked: bool,
       note: optText(1000).optional()
@@ -138,6 +148,14 @@ module.exports = async function productRoutes(app) {
     checkWarehouse(body.warehouse_id);
     saveSettings(req, before, { ...body, note: body.note ?? null, tracked: body.tracked ? 1 : 0 });
     return detail(before.id);
+  });
+
+  app.get('/packaging/reviews', async () => ({ items: packaging.pending() }));
+  app.post('/products/:id/packaging', async (req) => {
+    const body = z.object({ version: intIn('نسخه', 1, 1e12), price_units: intIn('قیمت برای چند عدد', 1, 100000), sale_units: intIn('عدد بستهٔ فروش', 1, 100000),
+      listings: z.array(z.object({ id: intIn('آگهی', 1, 1e12), version: intIn('نسخهٔ آگهی', 1, 1e12), units: intIn('عدد هر فروش', 1, 100000) })).max(5000) }).parse(req.body || {});
+    packaging.confirm(req, Number(req.params.id), body);
+    return detail(req.params.id);
   });
 
   /** The same settings for many products at once (only the fields sent change). */

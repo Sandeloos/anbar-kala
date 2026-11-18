@@ -10,7 +10,8 @@ import {
   formValues, busy, debounce, latin, inCurrency, CURRENCY, sourceBadge, smartTime, faDigits
 } from '../ui.js';
 import { createPicker } from '../picker.js';
-import { jalaliToday, timeNow, toIso, describeDate, readDate, readTime, gregorianDay } from '../jalali.js';
+import { jalaliToday, timeNow, toIso, describeDate, readDate, readTime } from '../jalali.js';
+import { orderDateRange } from '../order-date-range.js';
 import { entryHtml } from './timeline.js';
 
 export async function render(view, ctx, params) {
@@ -33,21 +34,16 @@ export function lineStatus(l) {
 
 /* ======================================================================== list */
 async function renderList(view, ctx) {
-  const f = Object.fromEntries(['q', 'platform', 'company', 'status', 'period', 'page'].map((k) => [k, ctx.query.get(k) || '']));
+  const f = Object.fromEntries(['q', 'platform', 'company', 'status', 'from_date', 'to_date', 'page'].map((k) => [k, ctx.query.get(k) || '']));
   const [{ items: platforms }, { items: companies }] = await Promise.all([get('/platforms'), get('/companies')]);
   let data = null;
-  const periods = { '': 'همه', today: 'امروز', yesterday: 'دیروز', week: '۷ روز' };
-  const range = () => {
-    if (f.period === 'today') return { from: gregorianDay(0), to: '' };
-    if (f.period === 'yesterday') return { from: gregorianDay(-1), to: gregorianDay(0) };
-    if (f.period === 'week') return { from: gregorianDay(-6), to: '' };
-    return { from: '', to: '' };
-  };
+  let selectedRange = null;
   view.innerHTML = `
     <div class="page-head">
       <div><h1>سفارش‌ها</h1><p>هر سفارش با قیمت سایت شرکت در همان ساعت سفارش ثبت می‌شود.</p></div>
       <div class="page-actions"><a class="btn" href="#/orders/import">${icon('download')}ورود از اکسل</a><a class="btn btn-primary" href="#/orders/new">${icon('plus')}سفارش جدید</a></div>
     </div>
+    <div id="o-range"></div>
     <div class="card" style="display:grid;gap:12px">
       <div class="toolbar">
         <label class="search"><span class="sr-only">جستجو</span>${icon('search')}<input type="search" id="o-q" value="${esc(f.q)}" placeholder="شماره‌ی سفارش یا نام کالا…"></label>
@@ -57,7 +53,7 @@ async function renderList(view, ctx) {
       <div class="toolbar">
         <div class="seg" role="group" aria-label="وضعیت">${[['', 'همه'], ['pending', 'منتظر دریافت'], ['done', 'انجام‌شده'], ['manual', 'قیمت دستی یا نامطمئن'], ['cancelled', 'لغوشده']]
           .map(([k, v]) => `<button type="button" data-status="${k}" aria-pressed="${k === f.status}">${v}</button>`).join('')}</div>
-        <div class="seg" role="group" aria-label="زمان">${Object.entries(periods).map(([k, v]) => `<button type="button" data-period="${k}" aria-pressed="${k === f.period}">${v}</button>`).join('')}</div>
+
       </div>
     </div>
     <section class="card card-flush" aria-label="فهرست سفارش‌ها"><div id="o-list">${skeleton(8)}</div></section>`;
@@ -84,9 +80,10 @@ async function renderList(view, ctx) {
         <button class="icon-btn sm" type="button" data-page="${data.page + 1}" ${data.page >= data.pages ? 'disabled' : ''} aria-label="صفحه‌ی بعد">${icon('next')}</button></div></div>`;
   }
   async function load() {
+    if (!selectedRange) { $('#o-list', view).innerHTML = '<p class="muted" style="padding:18px">برای دیدن سفارش‌ها، ابتدا تاریخ را مشخص کنید.</p>'; return; }
     ctx.setQuery(f);
     try {
-      data = await get('/orders', { q: f.q, platform: f.platform, company: f.company, status: f.status, page: f.page, ...range() });
+      data = await get('/orders', { q: f.q, platform: f.platform, company: f.company, status: f.status, page: f.page, ...selectedRange });
       paint();
     } catch (err) { $('#o-list', view).innerHTML = empty('alert', 'فهرست سفارش‌ها نیامد', err.message); }
   }
@@ -105,7 +102,10 @@ async function renderList(view, ctx) {
     }
     if (b.dataset.page) { f.page = b.dataset.page === '1' ? '' : b.dataset.page; load(); }
   };
-  await load();
+  const dates = orderDateRange($('#o-range', view), { from: f.from_date, to: f.to_date, onApply: (r) => {
+    selectedRange = r; f.from_date = r.from_date; f.to_date = r.to_date; f.page = ''; load();
+  } });
+  if (f.from_date && f.to_date) dates.apply(); else await load();
   const off = ctx.subscribe('orders', debounce(() => load(), 800));
   return () => off();
 }
@@ -191,7 +191,7 @@ async function renderNew(view, ctx) {
       <div class="ol-main">
         <div class="cell-title"><strong>${esc(l.name)}</strong>
           <div class="cell-meta"><span>${esc(l.company_name)}</span>${l.listing_id ? `<span class="badge badge-blue">آگهی${l.code ? ` ${esc(l.code)}` : ''}</span>` : ''}
-          <span>${l.units === l.units_per_pack ? `کل بسته (${fa(l.units)} عدد)` : `${fa(l.units)} عدد از بسته‌ی ${fa(l.units_per_pack)} عددی`}</span></div></div>
+          <span>${fa(l.units)} عدد در هر فروش · قیمت سایت برای ${fa(l.units_per_pack)} عدد</span></div></div>
         <button class="icon-btn sm" type="button" data-remove aria-label="حذف ${esc(l.name)} از سفارش">${icon('x')}</button>
       </div>
       <div class="ol-fields">
@@ -398,7 +398,7 @@ async function renderOne(view, ctx, id) {
               ${l.platform_price ? `<span>قیمت پلتفرم: ${moneyText(l.platform_price, 'toman')}</span>` : ''}</div></div></td>
             <td class="col-num" data-label="تعداد">${fa(l.qty)} × ${fa(l.units_per_sale)} = <b>${fa(l.units_total)}</b> عدد</td>
             <td class="col-num" data-label="قیمت سایت"><span class="price">${money(l.site_price, l.currency)}</span>
-              <div class="small muted">${l.site_price_source === 'manual' ? '<span class="badge badge-orange">دستی</span>' : `${esc(smartTime(l.site_price_at))} ${sourceBadge(l.site_price_source)}`}${l.units_per_sale !== l.units_per_pack ? ` · ${fa(l.units_per_sale)} از ${fa(l.units_per_pack)}` : ''}</div>
+              <div class="small muted">${l.site_price_source === 'manual' ? '<span class="badge badge-orange">دستی</span>' : `${esc(smartTime(l.site_price_at))} ${sourceBadge(l.site_price_source)}`}${l.units_per_sale !== l.units_per_pack ? ` · مبنای قیمت: ${fa(l.units_per_pack)} عدد` : ''}</div>
               ${l.price_uncertain ? '<div class="small" style="color:var(--amber)">نامطمئن: سایت بعد از زمان سفارش بررسی نشده بود</div>' : ''}</td>
             <td class="col-num" data-label="مبلغ برای شرکت"><span class="price">${money(l.qty * l.settle_unit_price, l.currency)}</span>
               ${l.settle_manual ? `<div class="small"><span class="badge badge-orange">دستی</span> ${esc(l.settle_reason || '')}</div>` : ''}</td>
@@ -447,9 +447,9 @@ async function renderOne(view, ctx, id) {
   function priceSheet(l) {
     const cur = CURRENCY[l.currency];
     const body = openSheet('تغییر دستی قیمت', `<form class="form" id="f-price" novalidate>
-      <p><b>${esc(l.product_name)}</b><br><span class="small muted">${fa(l.units_per_sale)} عدد در هر فروش از بسته‌ی ${fa(l.units_per_pack)} عددی · ${fa(l.qty)} فروش</span></p>
+      <p><b>${esc(l.product_name)}</b><br><span class="small muted">${fa(l.units_per_sale)} عدد در هر فروش · مبنای قیمت سایت ${fa(l.units_per_pack)} عدد · ${fa(l.qty)} فروش</span></p>
       <div class="callout callout-warn small">${icon('info')}<span>با نام شما و دلیلی که می‌نویسید در سابقه‌ی سفارش و گزارش فعالیت ثبت می‌شود.</span></div>
-      <div class="field"><label for="p-site">قیمت سایت در ساعت سفارش (کل بسته، ${cur})</label><input id="p-site" name="site_price" inputmode="numeric" value="${fa(inCurrency(l.site_price, l.currency))}">
+      <div class="field"><label for="p-site">قیمت سایت در ساعت سفارش (${fa(l.units_per_pack)} عدد، ${cur})</label><input id="p-site" name="site_price" inputmode="numeric" value="${fa(inCurrency(l.site_price, l.currency))}">
         <span class="hint">با تغییر آن، مبلغ هر فروش دوباره حساب می‌شود.</span></div>
       <div class="field"><label for="p-settle">یا مستقیم: مبلغ هر فروش برای شرکت (${cur})</label><input id="p-settle" name="settle_unit_price" inputmode="numeric" value="${fa(inCurrency(l.settle_unit_price, l.currency))}">
         <span class="hint">مثلاً وقتی بخشی از بسته را به قیمت توافقی فروخته‌اید.</span></div>

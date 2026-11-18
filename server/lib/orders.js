@@ -25,7 +25,7 @@ const FIRST_SEEN_GRACE_MS = 15 * 60e3;
 
 const OUTCOME_LABEL = { ok: 'درست رسید', excess: 'اضافه رسید', short: 'کم رسید / نرسید', wrong: 'اشتباه رسید', cancelled: 'لغو شد' };
 
-function createOrders({ db, sync, events, audit, stock }) {
+function createOrders({ packaging, db, sync, events, audit, stock }) {
   const { move, saleValue } = stock;
   /* ------------------------------------------------------------ lookups */
   function productRow(id) {
@@ -62,6 +62,7 @@ function createOrders({ db, sync, events, audit, stock }) {
       }
       p = productRow(productId);
     }
+    if (packaging) p.units_per_pack = packaging.at(p, orderedAt);
     const at = sync.priceAt(productId, orderedAt, { graceMs: FIRST_SEEN_GRACE_MS });
     return {
       product: { id: p.id, name: p.name, company_id: p.company_id, company_name: p.company_name, currency: p.currency, units_per_pack: p.units_per_pack,
@@ -87,7 +88,7 @@ function createOrders({ db, sync, events, audit, stock }) {
     const p = productRow(productId);
     const qty = Number(line.qty);
     if (!Number.isInteger(qty) || qty < 1) throw badRequest(`${where}: تعداد باید عدد صحیح ۱ یا بیشتر باشد.`);
-    const unitsPerSale = listing ? listing.units : Number(line.units_per_sale || p.units_per_pack);
+    const unitsPerSale = listing ? listing.units : Number(line.units_per_sale || p.sale_pack_units || p.units_per_pack);
     if (!Number.isInteger(unitsPerSale) || unitsPerSale < 1) throw badRequest(`${where}: تعداد عدد در هر فروش معتبر نیست.`);
     let sitePrice;
     let priceAt = null;
@@ -109,7 +110,8 @@ function createOrders({ db, sync, events, audit, stock }) {
       historyId = at.id;
       uncertain = at.before_first_seen || !p.last_checked_at || p.last_checked_at < orderedAt ? 1 : 0;
     }
-    let settle = Math.round((sitePrice * unitsPerSale) / p.units_per_pack);
+    const priceUnits = packaging ? packaging.at(p, orderedAt) : p.units_per_pack;
+    let settle = Math.round((sitePrice * unitsPerSale) / priceUnits);
     let manual = 0;
     if (line.settle_unit_price_manual !== undefined && line.settle_unit_price_manual !== null && line.settle_unit_price_manual !== '') {
       if (!line.reason) throw badRequest(`${where}: برای مبلغ دستی دلیل بنویسید.`);
@@ -118,7 +120,7 @@ function createOrders({ db, sync, events, audit, stock }) {
     }
     return {
       company_id: p.company_id, product_id: p.id, listing_id: listing ? listing.id : null, qty, units_per_sale: unitsPerSale,
-      units_total: qty * unitsPerSale, units_per_pack: p.units_per_pack,
+      units_total: qty * unitsPerSale, units_per_pack: priceUnits,
       platform_price: line.platform_price === undefined || line.platform_price === '' || line.platform_price === null ? null : Math.round(Number(line.platform_price)),
       site_price: sitePrice, site_price_at: priceAt, site_price_source: source, site_price_history_id: historyId, price_uncertain: uncertain,
       settle_unit_price: settle, settle_manual: manual || (source === 'manual' ? 1 : 0), settle_reason: line.reason || null, name: p.name

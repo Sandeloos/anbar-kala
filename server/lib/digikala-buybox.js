@@ -17,7 +17,7 @@ function competition(v, suggestion) {
 function createBuybox({ db, client, connection, audit, events, priceFor, variantIdOf, onRefused }) {
   const locks = new Set();
   let scanning = null;
-  const listing = (id) => db.get(`SELECT l.*, p.regular_price, p.units_per_pack FROM listings l
+  const listing = (id) => db.get(`SELECT l.*, p.regular_price, p.units_per_pack, p.packaging_pending, p.name, p.category_names, p.pricing_group FROM listings l
     JOIN products p ON p.id = l.product_id JOIN platforms pl ON pl.id = l.platform_id WHERE l.id = ? AND pl.code = 'digikala'`, Number(id));
   const list = () => db.all(`SELECT b.*, l.code, l.dk_state, p.name AS product_name FROM dk_buybox b
     JOIN listings l ON l.id = b.listing_id JOIN products p ON p.id = l.product_id ORDER BY b.is_winner, b.checked_at DESC LIMIT 500`);
@@ -76,14 +76,14 @@ function createBuybox({ db, client, connection, audit, events, priceFor, variant
     const before = listing(id);
     const snapshot = db.get('SELECT * FROM dk_buybox WHERE listing_id = ?', id);
     if (!before || !snapshot) throw notFound();
-    if (!before.active || before.dk_state === 'blocked') throw conflict('آگهی غیرفعال یا متوقف است.');
+    if (!before.active || before.packaging_pending || before.dk_state === 'blocked') throw conflict('آگهی غیرفعال یا متوقف است.');
     if (snapshot.error || snapshot.suggested_price !== expected || Date.now() - Date.parse(snapshot.checked_at) > 15 * 60e3) throw conflict('پیشنهاد کهنه است؛ دوباره بررسی کنید.');
     if (db.get("SELECT 1 FROM dk_jobs WHERE listing_id = ? AND status IN ('pending', 'approved', 'needs_approval')", id)) throw conflict('ابتدا کار قیمت‌گذاری این آگهی را تعیین تکلیف کنید.');
     locks.add(id);
     try {
       const fresh = await check(id);
       const current = listing(id);
-      if (fresh.suggested_price !== expected || fresh.current_price !== snapshot.current_price || fresh.formula_price !== snapshot.formula_price || current.version !== before.version || !current.active || current.dk_state === 'blocked' || connection().mode !== 'live') throw conflict('قیمت یا آگهی تغییر کرده؛ پیشنهاد تازه را دوباره تأیید کنید.');
+      if (fresh.suggested_price !== expected || fresh.current_price !== snapshot.current_price || fresh.formula_price !== snapshot.formula_price || current.version !== before.version || !current.active || current.packaging_pending || current.dk_state === 'blocked' || connection().mode !== 'live') throw conflict('قیمت یا آگهی تغییر کرده؛ پیشنهاد تازه را دوباره تأیید کنید.');
       try {
         await client().setPrice(variantIdOf(current.code), expected, fresh.variant.credit_increase_percentage ?? 0);
       } catch (err) {

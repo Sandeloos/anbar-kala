@@ -134,6 +134,7 @@ test('import a Digikala CSV: map columns, link an unknown code, import', async (
   await page.click('[data-commit]');
   await expect(page.locator('#s-preview')).toContainText('۱ سفارش و ۱ قلم ثبت شد');
   await page.goto('/#/orders?q=880001');
+  await page.locator('#o-range [data-days="0"]').click();
   await expect(page.locator('#o-list tbody tr')).toHaveCount(1);
 });
 

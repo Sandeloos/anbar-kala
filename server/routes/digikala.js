@@ -14,6 +14,7 @@ module.exports = async function digikalaRoutes(app) {
     status: digikala.status(),
     attention: digikala.jobs({ status: 'attention', limit: 100 }).filter((j) => j.status === 'needs_approval' || j.status === 'failed'),
     blocked: digikala.blocked(),
+    packaging_count: app.ctx.packaging.count(),
     recent: digikala.jobs({ limit: Number(req.query.limit) || 60 })
   }));
 
@@ -60,6 +61,7 @@ module.exports = async function digikalaRoutes(app) {
         variant_id: intIn('کد تنوع', 1, 1e12),
         product_id: intIn('کالای سایت', 1, 1e9),
         units: intIn('تعداد عدد در هر فروش', 1, 100000),
+        auto_price: z.boolean().optional(),
         multiplier: z.preprocess((v) => v === undefined ? undefined : Number(toLatinDigits(String(v)).replace(/٫/g, '.')), z.number().min(0.5).max(11).optional())
       }), { error: 'چیزی انتخاب نشده.' }).min(1, 'دست‌کم یک تنوع را انتخاب کنید.').max(5000)
     }).parse(req.body || {});
@@ -68,8 +70,8 @@ module.exports = async function digikalaRoutes(app) {
 
   app.post('/digikala/listings/:id/reprice', async (req) => ({ job: digikala.reprice(req, req.params.id) }));
 
-  app.get('/digikala/operations', async () => ({ reference: digikala.reference.list(), buybox: digikala.buybox.list(),
-    orders: digikala.orderSync.list(), sync: digikala.orderSync.state() }));
+  app.get('/digikala/operations', async (req) => ({ reference: digikala.reference.list(), buybox: digikala.buybox.list(),
+    orders: req.query.from && req.query.to ? digikala.orderSync.list(z.object({ from: z.iso.datetime(), to: z.iso.datetime() }).parse(req.query)) : [], sync: digikala.orderSync.state() }));
   app.post('/digikala/reference/:id/check', async (req) => { await digikala.reference.refresh(req, req.params.id); return { ok: true }; });
   app.post('/digikala/buybox/check', async () => { await digikala.buybox.scan(); return { ok: true }; });
   app.post('/digikala/buybox/:id/approve', async (req) => {

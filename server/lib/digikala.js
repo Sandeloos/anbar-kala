@@ -25,6 +25,7 @@
 const crypto = require('crypto');
 const { nowIso, badRequest, notFound, conflict, searchKey } = require('./util');
 const { createDigikalaClient, decryptChallenge, checkPrivateKey, DigikalaError, DEFAULT_USER_AGENT, trustedUserAgent, sellerIdOf } = require('./digikala-api');
+const { defaultMultiplier, pricingGroup, priceUnitsSuggestion } = require('./pricing-defaults');
 const { guessUnits } = require('./sync');
 const { createReferenceRequests } = require('./digikala-reference');
 const { createBuybox } = require('./digikala-buybox');
@@ -36,10 +37,10 @@ const SELF_TOKEN_DAYS = 360; // what the seller panel shows for a new self-token
 
 /** Digikala price of a listing by its formula, in rials (null when it cannot be computed). */
 function priceFor(listing, product) {
-  if (!listing || !product || product.regular_price === null || product.regular_price === undefined) return null;
-  if (listing.margin_pct === null || listing.margin_pct === undefined) return null;
+  if (!listing || !product || product.packaging_pending || product.regular_price === null || product.regular_price === undefined) return null;
+  if (!listing.margin_default && (listing.margin_pct === null || listing.margin_pct === undefined)) return null;
   const base = Math.round((product.regular_price * listing.units) / product.units_per_pack);
-  const raw = base * (1 + Number(listing.margin_pct) / 100) + (listing.fixed_add || 0);
+  const raw = base * (1 + (listing.margin_default ? defaultMultiplier(product) - 1 : Number(listing.margin_pct) / 100)) + (listing.fixed_add || 0);
   const step = Math.max(1, listing.round_to || 1);
   return { base, price: Math.ceil(Math.round(raw) / step) * step };
 }
@@ -148,14 +149,14 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
   }
 
   /* ------------------------------------------------------------ the queue */
-  const listingRow = (id) => db.get(`SELECT l.*, p.regular_price, p.units_per_pack, p.name AS product_name, pl.code AS platform_code
+  const listingRow = (id) => db.get(`SELECT l.*, p.regular_price, p.units_per_pack, p.sale_pack_units, p.packaging_pending, p.category_names, p.pricing_group, p.name AS product_name, p.name, pl.code AS platform_code
                                      FROM listings l JOIN products p ON p.id = l.product_id JOIN platforms pl ON pl.id = l.platform_id WHERE l.id = ?`, Number(id));
 
   /** Queues (or refreshes) the open job of a listing. Inside the caller's transaction. */
   function enqueue(listingId, reason) {
     if (conn().mode === 'off') return null;
     const l = listingRow(listingId);
-    if (!l || l.platform_code !== 'digikala' || !l.auto_price || !l.active || l.dk_state === 'blocked') return null;
+    if (!l || l.platform_code !== 'digikala' || !l.auto_price || !l.active || l.packaging_pending || l.dk_state === 'blocked') return null;
     const f = priceFor(l, l);
     const now = nowIso();
     const open = db.get("SELECT * FROM dk_jobs WHERE listing_id = ? AND status IN ('pending', 'needs_approval', 'approved')", l.id);
@@ -234,7 +235,7 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
   async function processJob(job, mode) {
     const l = listingRow(job.listing_id);
     const name = l ? `${l.code || ''} «${l.product_name}»` : `#${job.listing_id}`;
-    if (!l || !l.auto_price || !l.active || l.dk_state === 'blocked') return finish(job, { status: 'skipped', error: 'آگهی قیمت‌گذاری خودکار ندارد یا متوقف است.' });
+    if (!l || !l.auto_price || !l.active || l.packaging_pending || l.dk_state === 'blocked') return finish(job, { status: 'skipped', error: 'آگهی قیمت‌گذاری خودکار ندارد یا متوقف است.' });
     const vid = variantIdOf(l.code);
     if (!vid) return finish(job, { status: 'failed', error: 'کد تنوع دیجی‌کالا (DKPC) برای این آگهی ثبت نشده.' }, null);
     const f = priceFor(l, l);
@@ -247,6 +248,8 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
     } catch (err) {
       return failOrRetry(job, err);
     }
+    const latest = listingRow(l.id);
+    if (latest.packaging_pending || latest.units_per_pack !== l.units_per_pack || latest.units !== l.units || latest.product_id !== l.product_id) return finish(job, { status: 'skipped', error: 'بسته‌بندی یا تطبیق کالا در حال بررسی است.' });
     const current = v.price_sale ?? null;
     const change = current ? Math.abs(f.price - current) / current : null;
     const base = { site_price: f.base, target_price: f.price, current_price: current, reference_price: v.price_list ?? null, change_pct: change === null ? null : Math.round(change * 1000) / 10 };
@@ -442,10 +445,10 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
       const k = codeKey(v.supplier_code || '');
       if (k && (k === seller || counts.get(k) > 5)) v.supplier_code = null;
     }
-    const products = db.all(`SELECT p.id, p.name, p.description, p.permalink, p.sku, p.site_status, p.units_per_pack, p.regular_price, p.company_id, c.name AS company_name, c.currency
+    const products = db.all(`SELECT p.id, p.name, p.description, p.permalink, p.sku, p.site_status, p.units_per_pack, p.sale_pack_units, p.packaging_pending, p.category_names, p.pricing_group, p.regular_price, p.company_id, c.name AS company_name, c.currency
                                         FROM products p JOIN companies c ON c.id = p.company_id WHERE p.removed_at IS NULL AND c.active = 1`);
     const match = createMatcher(products);
-    const items = fresh.map((v) => ({ ...v, suggestions: match(v) }));
+    const items = fresh.map((v) => ({ ...v, suggestions: match(v).map((p) => ({ ...p, units_estimate: v.units_guess == null ? priceUnitsSuggestion(v, p) : null })) }));
     items.sort((a, b) => ((b.suggestions[0] || {}).score || 0) - ((a.suggestions[0] || {}).score || 0));
 
     for (const [k, p] of previews) if (Date.now() - p.at > PREVIEW_TTL) previews.delete(k);
@@ -486,8 +489,9 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
         const id = Number(db.run(`INSERT INTO listings (platform_id, product_id, code, title, units, platform_price, note, search_text, auto_price, margin_pct, round_to, created_at, updated_at)
                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         pid, product.id, code, title, r.units, v.price_sale, v.supplier_code ? `کد تأمین‌کننده: ${v.supplier_code}` : null,
-        searchKey([code, title, product.name, product.sku].filter(Boolean).join(' ')), r.multiplier === undefined ? 0 : 1, r.multiplier === undefined ? null : (r.multiplier - 1) * 100, 1, now, now).lastInsertRowid);
-        if (r.multiplier !== undefined && enqueue(id, 'formula')) db.afterCommit(kick);
+        searchKey([code, title, product.name, product.sku].filter(Boolean).join(' ')), r.auto_price === false ? 0 : 1, Math.round(((r.multiplier ?? defaultMultiplier(product)) - 1) * 10000) / 100, 1, now, now).lastInsertRowid);
+        if (r.multiplier === undefined) db.run('UPDATE listings SET margin_default = 1 WHERE id = ?', id);
+        if (r.auto_price !== false && enqueue(id, 'formula')) db.afterCommit(kick);
         audit(actor, { action: 'create', entity: 'listing', id, summary: `ورود آگهی دیجی‌کالا ${code} برای «${product.name}» — هر فروش ${r.units} عدد از ${product.units_per_pack}${r.multiplier === undefined ? '' : ` — ضریب قیمت ${r.multiplier}`}` });
         created.push({ id, variant: v.variant_id });
       }
@@ -496,6 +500,13 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
     for (const x of created) p.variants.delete(x.variant);
     return { created: created.length, skipped };
   }
+
+  if (!db.get('SELECT applied FROM pricing_defaults_state WHERE id = 1').applied) db.tx(() => {
+    for (const l of db.all('SELECT id FROM listings WHERE platform_id = ? AND auto_price = 1 AND active = 1', platformId())) enqueue(l.id, 'defaults');
+    db.run('UPDATE pricing_defaults_state SET applied = 1 WHERE id = 1');
+    audit(null, { action: 'update', entity: 'settings', summary: 'پیش‌فرض قیمت‌گذاری دیجی‌کالا فعال شد: ابزار ۱٫۴ و غیرابزار ۱٫۵؛ خاموش‌کردن صریح کاربران حفظ شد.' });
+    db.afterCommit(kick);
+  });
 
   return {
     reference, buybox, orderSync, status, setKey, connect, setSettings, enqueue, onChanges, handles, kick, processDue, approve, reject, reactivate, reprice, jobs, blocked,
@@ -555,7 +566,7 @@ function createMatcher(products) {
   }
   const view = (p, score, why) => ({
     product_id: p.id, name: p.name, sku: p.sku, company_id: p.company_id, company_name: p.company_name, currency: p.currency,
-    units_per_pack: p.units_per_pack, regular_price: p.regular_price, permalink: p.permalink, description: plain(p.description), score: Math.round(score * 100) / 100, why, confident: false
+    units_per_pack: p.units_per_pack, sale_pack_units: p.sale_pack_units, packaging_pending: p.packaging_pending, default_multiplier: defaultMultiplier(p), pricing_group: pricingGroup(p), regular_price: p.regular_price, permalink: p.permalink, description: plain(p.description), score: Math.round(score * 100) / 100, why, confident: false
   });
   return (v) => {
     const out = new Map();

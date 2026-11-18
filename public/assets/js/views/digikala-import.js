@@ -13,7 +13,7 @@ const latin = (s) => String(s ?? '').replace(/[٬,]/g, '').replace(/٫/g, '.').r
 const kindOf = (it) => {
   const top = it.suggestions[0];
   if (!top) return 'none';
-  return top.confident ? 'sure' : 'check';
+  return top.confident && it.units_guess != null ? 'sure' : 'check';
 };
 const why = (s) => (s.why === 'sku' ? 'کد یکسان' : `امتیاز نام و توضیحات ${fa(Math.round(s.score * 100))}٪`);
 
@@ -52,7 +52,9 @@ export async function render(view) {
 
   function row(it) {
     const sure = kindOf(it) === 'sure';
-    const units = it.units_guess ?? '';
+    const top = it.suggestions[0];
+    const units = it.units_guess ?? top?.units_estimate?.units ?? '';
+    const multiplier = top?.default_multiplier ?? 1.5;
     return `<div class="list-item di-row" data-v="${it.variant_id}" data-kind="${kindOf(it)}">
       <input type="checkbox" class="di-check" data-pick aria-label="انتخاب ${esc(it.title)}"${sure ? ' checked' : ''}>
       <span class="grow">
@@ -63,12 +65,12 @@ export async function render(view) {
           <span class="field"><label for="di-p-${it.variant_id}">کالای سایت</label><select id="di-p-${it.variant_id}" data-product>${options(it)}</select></span>
           <span class="field di-units"><label for="di-u-${it.variant_id}">هر فروش چند عدد؟</label><input id="di-u-${it.variant_id}" data-units inputmode="numeric" placeholder="تأیید تعداد" value="${units === '' ? '' : fa(units)}"></span>
         </span>
-        <span class="small muted" data-hint></span>
+        <span class="small muted" data-hint></span><label class="check"><input type="checkbox" data-auto checked> قیمت‌گذاری خودکار (پیش‌فرض روشن)</label>
         <a class="link small" data-site-link target="_blank" rel="noopener noreferrer" hidden>مشاهدهٔ کالا در سایت شرکت ↗</a>
         <details class="di-copy"><summary>مقایسهٔ توضیحات</summary><p>دیجی‌کالا: ${esc(it.description || 'توضیحات در دسترس نیست؛ تطبیق بر اساس نام است.')}</p><p data-site-copy></p></details>
         <div class="form-actions"><button class="btn btn-sm" type="button" data-formula-toggle aria-expanded="false" aria-controls="di-f-${it.variant_id}">+ ضریب قیمت</button></div>
         <div id="di-f-${it.variant_id}" data-formula hidden>
-          <div class="field"><label for="di-m-${it.variant_id}">قیمت پایه ضربدر چند؟</label><input id="di-m-${it.variant_id}" data-multiplier inputmode="decimal" value="۱٫۳" aria-describedby="di-price-${it.variant_id}"></div>
+          <div class="field"><label for="di-m-${it.variant_id}">قیمت پایه ضربدر چند؟</label><input id="di-m-${it.variant_id}" data-multiplier inputmode="decimal" value="${fa(multiplier)}" aria-describedby="di-price-${it.variant_id}"></div>
           <p id="di-price-${it.variant_id}" class="small" data-price aria-live="polite"></p>
           <p class="small muted">${st.mode === 'live' ? 'پس از ثبت، قیمت به صف ارسال دیجی‌کالا می‌رود؛ تغییر بزرگ منتظر تأیید می‌ماند.' : st.mode === 'dry_run' ? 'حالت آزمایشی: قیمت محاسبه می‌شود و ارسال واقعی انجام نمی‌شود.' : 'ارسال قیمت خاموش است؛ فرمول ذخیره می‌شود تا قیمت‌گذاری را فعال کنید.'}</p>
           <button class="btn btn-primary btn-sm" type="button" data-save-one>اتصال و ثبت ضریب</button>
@@ -96,7 +98,7 @@ export async function render(view) {
     const units = Number(latin($('[data-units]', r).value));
     const base = p?.regular_price != null && units > 0 ? Math.round(p.regular_price * units / p.units_per_pack) : null;
     $('[data-price]', r).textContent = base !== null && factor >= 0.5 && factor <= 11 ? `قیمت ${fa(units)} عدد: ${moneyText(base, p.currency)} × ${fa(factor)} = ${moneyText(Math.ceil(Math.round(base * factor)), p.currency)} — افزایش روی قیمت پایه ${fa(Math.round((factor - 1) * 10000) / 100)}٪` : 'کالا، تعداد فروش و ضریب معتبر بین ۰٫۵ و ۱۱ را وارد کنید.';
-    $('[data-hint]', r).textContent = p ? `بسته‌ی کامل این کالا ${fa(p.units_per_pack)} عدد است؛ قیمت سایت ${moneyText(p.regular_price, p.currency)}.` : '';
+    $('[data-hint]', r).textContent = p ? `قیمت سایت برای ${fa(p.units_per_pack)} عدد؛ بستهٔ فروش ${fa(p.sale_pack_units || p.units_per_pack)} عدد؛ ضریب پیش‌فرض ${fa(p.default_multiplier || 1.5)}.${it.units_guess == null && p.units_estimate ? ` تعداد ${fa(p.units_estimate.units)} از نزدیکی یا نسبت قیمت‌ها تخمین زده شده؛ تعداد را بررسی و تأیید کنید.` : ''}` : '';
   }
 
   function paint() {
@@ -119,7 +121,7 @@ export async function render(view) {
         ${[['all', 'همه'], ['sure', 'پیشنهاد مطمئن'], ['check', 'نیاز به بررسی'], ['none', 'بدون پیشنهاد']].map(([k, t]) => `<button type="button" data-f="${k}" aria-pressed="${filter === k}">${t} <small>${fa(n(k))}</small></button>`).join('')}
       </div>
       <section class="card" aria-label="تنوع‌های دیجی‌کالا"><div class="list">${data.items.map(row).join('')}</div><p id="di-no-matches" class="small muted" hidden>در این فیلتر موردی نیست؛ فیلتر دیگری انتخاب کنید.</p></section><div class="form-actions"><button class="btn" id="di-prev">قبلی</button><span id="di-page"></span><button class="btn" id="di-next">بعدی</button></div>
-      <div class="card"><div class="field"><label for="di-bulk-multiplier">ضریب گروهی برای همهٔ انتخاب‌شده‌ها (حتی صفحات دیگر)</label><input id="di-bulk-multiplier" inputmode="decimal" value="۱٫۳"></div><button class="btn" type="button" id="di-bulk-apply">اعمال ضریب به انتخاب‌شده‌ها</button><p class="small muted">قبل از تأیید اتصال، قیمت هر ردیف را بررسی کنید. ضریب گروهی جای ضریب قبلی انتخاب‌شده‌ها می‌نشیند.</p></div>
+      <div class="card"><div class="field"><label for="di-bulk-multiplier">ضریب گروهی برای همهٔ انتخاب‌شده‌ها (حتی صفحات دیگر)</label><input id="di-bulk-multiplier" inputmode="decimal" value="۱٫۵"></div><button class="btn" type="button" id="di-bulk-apply">اعمال ضریب به انتخاب‌شده‌ها</button><p class="small muted">قبل از تأیید اتصال، قیمت هر ردیف را بررسی کنید. ضریب گروهی جای ضریب قبلی انتخاب‌شده‌ها می‌نشیند.</p></div>
       <div class="di-bar"><span id="di-count"></span><button class="btn btn-primary" type="button" id="di-save">${icon('check')}تأیید اتصال آگهی‌ها</button></div></div>`;
     $$('.di-row', box).forEach((r) => {
       const draft = drafts.get(r.dataset.v);
@@ -127,6 +129,7 @@ export async function render(view) {
         $('[data-product]', r).value = draft.product;
         $('[data-units]', r).value = draft.units;
         $('[data-pick]', r).checked = draft.picked;
+        $('[data-auto]', r).checked = draft.auto;
         $('[data-multiplier]', r).value = draft.multiplier;
         $('[data-formula]', r).hidden = !draft.formula;
         $('[data-formula-toggle]', r).setAttribute('aria-expanded', String(draft.formula));
@@ -176,16 +179,17 @@ export async function render(view) {
     if (!input.dataset.ready) {
       input.dataset.ready = '1';
       createPicker(input, {
-        params: () => ({ products_only: 1 }),
+        params: () => ({ products_only: 1, variant_price: item(Number(r.dataset.v)).price_sale }),
         onPick(p) {
           const vid = Number(r.dataset.v);
           const it = item(vid);
-          const s = { product_id: p.product_id, name: p.name, company_name: p.company_name, currency: p.currency, units_per_pack: p.units_per_pack, regular_price: p.regular_price, permalink: p.permalink, description: p.description || '' };
+          const s = { product_id: p.product_id, name: p.name, company_name: p.company_name, currency: p.currency, units_per_pack: p.units_per_pack, sale_pack_units: p.sale_pack_units, default_multiplier: p.default_multiplier || 1.5, units_estimate: p.units_estimate, regular_price: p.regular_price, permalink: p.permalink, description: p.description || '' };
           extra.set(vid, [...(extra.get(vid) || []).filter((x) => x.product_id !== s.product_id), s]);
           const sel = $('[data-product]', r);
           sel.innerHTML = options(it);
           sel.value = String(s.product_id);
-          if (!latin($('[data-units]', r).value)) $('[data-units]', r).value = it.units_guess === null ? '' : fa(it.units_guess);
+          $('[data-multiplier]', r).value = fa(s.default_multiplier);
+          if (!latin($('[data-units]', r).value)) $('[data-units]', r).value = it.units_guess == null ? (s.units_estimate ? fa(s.units_estimate.units) : '') : fa(it.units_guess);
           $('[data-pick]', r).checked = true;
           wrap.hidden = true;
           hint(r);
@@ -221,15 +225,15 @@ export async function render(view) {
       const units = Number(latin($('[data-units]', r).value));
       if (!product) { r.hidden = false; $('[data-product]', r).focus(); return toast('برای همه‌ی تنوع‌های انتخاب‌شده کالای سایت را انتخاب کنید.', { error: true }); }
       if (!Number.isInteger(units) || units < 1) { r.hidden = false; $('[data-units]', r).focus(); return toast('تعداد عدد در هر فروش را درست بنویسید.', { error: true }); }
-      const formula = !$('[data-formula]', r).hidden;
+      const formula = $('[data-auto]', r).checked;
       const multiplier = Number(latin($('[data-multiplier]', r).value));
       if (formula && (!Number.isFinite(multiplier) || multiplier < 0.5 || multiplier > 11)) { r.hidden = false; $('[data-multiplier]', r).focus(); return toast('ضریب قیمت باید بین ۰٫۵ و ۱۱ باشد.', { error: true }); }
-      rows.push({ variant_id: Number(r.dataset.v), product_id: product, units, ...(formula ? { multiplier } : {}) });
+      rows.push({ variant_id: Number(r.dataset.v), product_id: product, units, auto_price: formula, ...(formula ? { multiplier } : {}) });
     }
     if (!rows.length) return;
     for (const r of $$('.di-row', view)) drafts.set(r.dataset.v, {
       product: $('[data-product]', r).value, units: $('[data-units]', r).value,
-      picked: $('[data-pick]', r).checked, multiplier: $('[data-multiplier]', r).value, formula: !$('[data-formula]', r).hidden
+      picked: $('[data-pick]', r).checked, auto: $('[data-auto]', r).checked, multiplier: $('[data-multiplier]', r).value, formula: !$('[data-formula]', r).hidden
     });
     saving = true;
     busy(btn, true);
@@ -300,7 +304,10 @@ export async function render(view) {
       else if (e.target.value) {
         const it = item(Number(r.dataset.v));
         const p = productOf(it, Number(e.target.value));
-        if (p && it.units_guess !== null) $('[data-units]', r).value = fa(it.units_guess);
+        if (p) {
+          $('[data-multiplier]', r).value = fa(p.default_multiplier || 1.5);
+          $('[data-units]', r).value = fa(it.units_guess ?? p.units_estimate?.units ?? '');
+        }
         $('[data-pick]', r).checked = true;
       }
       hint(r);

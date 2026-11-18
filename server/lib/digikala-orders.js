@@ -15,8 +15,8 @@ function normalizeOrder(raw) {
 function createDigikalaOrders({ db, client, connection, orders, audit, events }) {
   let running = null;
   const state = () => db.get('SELECT * FROM dk_operations_sync WHERE id = 1');
-  const list = () => db.all(`SELECT r.*, o.cancelled_at FROM dk_remote_orders r LEFT JOIN orders o ON o.id = r.order_id
-    ORDER BY r.updated_at DESC LIMIT 500`).map(({ payload, ...r }) => ({ ...r,
+  const list = ({ from, to } = {}) => db.all(`SELECT r.*, o.cancelled_at FROM dk_remote_orders r LEFT JOIN orders o ON o.id = r.order_id
+    ${from && to ? 'WHERE r.ordered_at >= ? AND r.ordered_at < ?' : ''} ORDER BY r.ordered_at DESC LIMIT 500`, ...(from && to ? [from, to] : [])).map(({ payload, ...r }) => ({ ...r,
     history: db.all('SELECT status, created_at FROM dk_order_events WHERE remote_id = ? ORDER BY id DESC LIMIT 20', r.remote_id) }));
 
   function materialize(actor, row) {

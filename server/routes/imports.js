@@ -7,6 +7,7 @@
  * links: { "<code or title>": { product_id, units } } creates the missing listings first.
  */
 const crypto = require('crypto');
+const { defaultMultiplier } = require('../lib/pricing-defaults');
 const { z, intIn } = require('./validate');
 const { badRequest, nowIso, toRial, searchKey, toLatinDigits } = require('../lib/util');
 const { parseDateTime } = require('../lib/jalali');
@@ -43,7 +44,7 @@ function createUploads() {
 const mappingSchema = z.record(z.string(), z.preprocess((v) => (v === '' || v === null || v === undefined ? undefined : Number(v)), z.number().int().min(0).optional()));
 
 module.exports = async function importRoutes(app) {
-  const { db, orders, audit, events } = app.ctx;
+  const { db, orders, audit, events, digikala } = app.ctx;
   const uploads = createUploads();
   app.addHook('onClose', async () => uploads.close());
   const platformRow = (id) => {
@@ -160,6 +161,10 @@ module.exports = async function importRoutes(app) {
         const title = sample ? sample.title || null : key;
         const id = Number(db.run(`INSERT INTO listings (platform_id, product_id, code, title, units, search_text, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           pl.id, p.id, code, title, link.units, searchKey([code, title, p.name].filter(Boolean).join(' ')), now, now).lastInsertRowid);
+        if (pl.code === 'digikala') {
+          db.run('UPDATE listings SET auto_price = 1, margin_pct = ?, margin_default = 1 WHERE id = ?', Math.round((defaultMultiplier(p) - 1) * 100), id);
+          if (digikala.enqueue(id, 'formula')) db.afterCommit(digikala.kick);
+        }
         audit(req, { action: 'create', entity: 'listing', id, summary: `افزودن آگهی ${pl.name}${code ? ` (${code})` : ''} برای «${p.name}» هنگام ورود از فایل` });
         n++;
       }

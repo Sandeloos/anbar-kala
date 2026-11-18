@@ -10,7 +10,7 @@ module.exports = async function dashboardRoutes(app) {
     const p = db.get(`SELECT COUNT(*) AS total,
         SUM(CASE WHEN stock_status = 'outofstock' THEN 1 ELSE 0 END) AS out_of_stock,
         SUM(CASE WHEN configured_at IS NULL THEN 1 ELSE 0 END) AS needs_setup,
-        SUM(CASE WHEN units_per_pack > 1 THEN 1 ELSE 0 END) AS multi_packs,
+        SUM(CASE WHEN COALESCE(sale_pack_units, units_per_pack) > 1 THEN 1 ELSE 0 END) AS multi_packs,
         SUM(CASE WHEN price_source = 'manual' THEN 1 ELSE 0 END) AS manual_prices
       FROM products WHERE removed_at IS NULL`);
     const changes = db.get(`SELECT

@@ -1,3 +1,4 @@
+import { orderDateRange } from '../order-date-range.js';
 import { get, post } from '../api.js';
 import { $, esc, fa, moneyText, when, skeleton, toast, busy, confirm, debounce } from '../ui.js';
 
@@ -11,10 +12,11 @@ export async function render(view, ctx) {
   let page = 0;
   let attention = false;
   let acting = false;
+  let selectedRange = null;
   view.innerHTML = skeleton(5);
   const matches = (r) => `${r.product_name || ''} ${r.code || ''} ${r.remote_id || ''}`.includes(query);
   const needs = (r) => tab === 'orders' ? !!r.error || !r.order_id : tab === 'reference' ? !['closed', 'resolved'].includes(r.status) : r.is_winner !== 1 || !!r.error;
-  const rows = () => data[tab].filter((r) => matches(r) && (!attention || needs(r)));
+  const rows = () => (tab === 'orders' && !selectedRange ? [] : data[tab]).filter((r) => matches(r) && (!attention || needs(r)));
 
   function buybox(r) {
     const difference = r.formula_price != null && r.current_price != null ? Math.max(0, r.formula_price - r.current_price) : null;
@@ -47,15 +49,17 @@ export async function render(view, ctx) {
   function paint() {
     view.innerHTML = `<div class="page-head"><div><h1>پیگیری دیجی‌کالا</h1><p>درخواست قیمت مرجع، رقابت بای‌باکس و سفارش‌ها در یک جا.</p></div><a class="btn" href="#/digikala">قیمت دیجی‌کالا</a></div>
       <div class="seg" role="group" aria-label="بخش پیگیری">${[['buybox', 'بای‌باکس'], ['reference', 'قیمت مرجع'], ['orders', 'سفارش‌ها']].map(([k, t]) => `<button data-tab="${k}" aria-pressed="${tab === k}">${t} (${fa(data[k].length)})</button>`).join('')}</div>
-      <section class="card"><p class="small muted">${tab === 'buybox' ? 'پیشنهاد از API رسمی دیجی‌کالا خوانده می‌شود؛ برنده‌شدن به عوامل دیگری هم بستگی دارد. ارسال فقط در حالت فعال و با تأیید شماست. کاهش تأییدشده تا تغییر فرمول پایه حفظ می‌شود.' : tab === 'reference' ? 'با رد قیمت به علت مرجع، درخواست خودکار ثبت می‌شود؛ فرم مناسب با نوع قیمت کالا خودکار انتخاب می‌شود؛ اگر تشخیص ممکن نباشد، مدیر باید زیردستهٔ تیکت را تنظیم کند. پاسخ یا بسته‌شدن تیکت به معنی تأیید قیمت نیست؛ نتیجه را بررسی و از صفحهٔ قیمت دوباره فعال کنید.' : 'هر ۵ دقیقه سفارش‌های جاری و تاریخچهٔ ۳۰ روز اخیر خوانده می‌شود؛ سوابق ذخیره‌شده باقی می‌مانند. ثبت داخلی پس از تطبیق آگهی و مشخص‌بودن قیمت زمان سفارش انجام می‌شود. تغییرات لغو، ارسال و مرجوعی برای رسیدگی نمایش داده می‌شوند.'}</p>
+      <div id="do-range"></div><section class="card"><p class="small muted">${tab === 'buybox' ? 'پیشنهاد از API رسمی دیجی‌کالا خوانده می‌شود؛ برنده‌شدن به عوامل دیگری هم بستگی دارد. ارسال فقط در حالت فعال و با تأیید شماست. کاهش تأییدشده تا تغییر فرمول پایه حفظ می‌شود.' : tab === 'reference' ? 'با رد قیمت به علت مرجع، درخواست خودکار ثبت می‌شود؛ فرم مناسب با نوع قیمت کالا خودکار انتخاب می‌شود؛ اگر تشخیص ممکن نباشد، مدیر باید زیردستهٔ تیکت را تنظیم کند. پاسخ یا بسته‌شدن تیکت به معنی تأیید قیمت نیست؛ نتیجه را بررسی و از صفحهٔ قیمت دوباره فعال کنید.' : 'هر ۵ دقیقه سفارش‌های جاری و تاریخچهٔ ۳۰ روز اخیر خوانده می‌شود؛ سوابق ذخیره‌شده باقی می‌مانند. ثبت داخلی پس از تطبیق آگهی و مشخص‌بودن قیمت زمان سفارش انجام می‌شود. تغییرات لغو، ارسال و مرجوعی برای رسیدگی نمایش داده می‌شوند.'}</p>
       <div class="form-actions"><button class="btn" id="do-refresh">تازه‌سازی نمایش</button>${tab === 'buybox' ? '<button class="btn btn-primary" id="do-check">بررسی بای‌باکس</button>' : tab === 'orders' ? '<button class="btn btn-primary" id="do-sync">همگام‌سازی سفارش‌ها</button>' : ''}</div>
       ${tab === 'orders' ? `<p class="small">آخرین همگام‌سازی موفق: ${data.sync.checked_at ? when(data.sync.checked_at) : 'هنوز انجام نشده'}${data.sync.error ? ` · خطا: ${esc(data.sync.error)}` : ''}</p>` : ''}
       <div class="field"><label for="do-query">جستجو با نام یا کد</label><input id="do-query" type="search" value="${esc(query)}"></div><label><input type="checkbox" id="do-attention"${attention ? ' checked' : ''}> فقط نیازمند پیگیری</label>
       <p class="small muted">تا ۵۰۰ مورد اخیر هر بخش نمایش داده می‌شود.</p><div class="list" id="do-list"></div>
       <div class="form-actions"><button class="btn" id="do-prev">قبلی</button><span id="do-page"></span><button class="btn" id="do-next">بعدی</button></div></section>`;
+    if (tab === 'orders') orderDateRange($('#do-range', view), { from: selectedRange?.from_date, to: selectedRange?.to_date, onApply: (r) => { selectedRange = r; page = 0; load().catch((err) => toast(err.message, { error: true })); } });
     paintRows();
+    if (tab === 'orders' && !selectedRange) $('#do-list', view).textContent = 'برای دیدن سفارش‌ها ابتدا تاریخ را مشخص کنید.';
   }
-  async function load() { data = await get('/digikala/operations'); paint(); }
+  async function load() { data = await get('/digikala/operations', selectedRange || {}); paint(); }
   view.oninput = (e) => { if (e.target.id === 'do-query') { query = e.target.value; page = 0; paintRows(); } };
   view.onchange = (e) => { if (e.target.id === 'do-attention') { attention = e.target.checked; page = 0; paintRows(); } };
   view.onclick = async (e) => {

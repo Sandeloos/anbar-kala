@@ -284,7 +284,8 @@ test('import: every variant is read, matched by supplier code or name, and only 
   assert.equal(l.product_id, product.id);
   assert.equal(l.units, 25);
   assert.equal(l.platform_price, 880000);
-  assert.equal(l.auto_price, 0, 'automatic pricing stays off until a formula is set');
+  assert.equal(l.auto_price, 1, 'automatic pricing is enabled by default');
+  assert.equal(l.margin_pct, 50, 'non-tool default multiplier is 1.5');
   assert.match(l.title, /لیوان کاغذی/);
   assert.ok(ctx.db.get("SELECT 1 FROM audit_log WHERE entity = 'listing' AND entity_id = ? AND summary LIKE 'ورود آگهی دیجی‌کالا%'", String(l.id)), 'audited');
 

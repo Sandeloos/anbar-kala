@@ -83,6 +83,7 @@ function normalise(raw, unit, parent) {
     stock_status: raw.stock_status || null,
     stock_quantity: manage ? qty : null,
     manage_stock: manage ? 1 : 0,
+    category_names: [...(raw.categories || parent?.categories || [])].map((c) => decodeEntities(c.name)).join('، ') || undefined,
     site_modified_at: gmt(raw.date_modified_gmt)
   };
 }
@@ -117,7 +118,7 @@ function backoffMinutes(failures) {
   return Math.min(60, 2 ** Math.max(1, failures));
 }
 
-function createSync({ db, config, secrets, events, log, fetchImpl, metrics }) {
+function createSync({ packaging, db, config, secrets, events, log, fetchImpl, metrics }) {
   const running = new Map(); // companyId → run kind
   const runPromises = new Set();
 
@@ -180,6 +181,7 @@ function createSync({ db, config, secrets, events, log, fetchImpl, metrics }) {
           db.run(`INSERT INTO price_history (product_id, regular_price, sale_price, stock_status, stock_quantity, price_changed, stock_changed,
                     source, effective_at, observed_at, user_id) VALUES (?, ?, ?, ?, ?, 1, 1, 'import', ?, ?, ?)`,
           id, it.regular_price, it.sale_price, it.stock_status, it.stock_quantity, now, now, userId);
+          if (it.category_names) db.run('UPDATE products SET category_names = ? WHERE id = ?', it.category_names, id);
           stats.created++;
           stats.ids.push(id);
           continue;
@@ -188,6 +190,8 @@ function createSync({ db, config, secrets, events, log, fetchImpl, metrics }) {
           stats.stale++;
           continue;
         }
+        if (packaging) packaging.observe(existing, it, { at: now, effectiveAt: effectiveTime(it.site_modified_at, existing.last_checked_at, now) });
+        if (it.category_names !== undefined) db.run('UPDATE products SET category_names = ? WHERE id = ?', it.category_names, existing.id);
         const priceChanged = existing.regular_price !== it.regular_price || existing.sale_price !== it.sale_price;
         const stockChanged = existing.stock_status !== it.stock_status || existing.stock_quantity !== it.stock_quantity;
         if (priceChanged || stockChanged) {
