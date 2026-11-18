@@ -62,8 +62,9 @@ The official specification is at `/open-api/v1/doc/specification.yml` (linked fr
 - Buybox: `GET pricing/buybox/price-suggestion/winning-price?product_variant_id=…` returns nullable
   `suggested_price` in rials. Only explicit `is_buy_box_winner=false` plus a lower official suggestion
   enables approval. Re-read before sending; an approved reduction expires when the base formula changes.
-- Tickets: creation returns `data.request.id`; status is read through `GET tickets/requests` filtered by
-  `search[request_id]`. Creation is not retried on network/5xx errors: an ambiguous response must not
+- Tickets: creation returns the internal `data.request.id`; status is located by internal id in the
+  paged `GET tickets/requests` list. `search[request_id]` filters the distinct provider-facing number
+  (e.g. `P-2627747`), which is stored separately for display. Creation is not retried on network/5xx errors: an ambiguous response must not
   generate duplicate requests. A local pending record survives missing category configuration.
 - Orders: `GET orders` and `GET orders/history?order_type=processed|returned|canceled` return **lines**,
   not nested orders. Group after reading all pages. Retain remote snapshots and status events, and let
