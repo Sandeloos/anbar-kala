@@ -521,7 +521,7 @@ test('reference form selects the required product branch and refuses incomplete 
     { type: 'dynamic_modal', name: 'products', extra: { price_type: 'recommended' }, condition: { field_name: 'method', operation: 'eq', value: 'opt_0' } },
     { type: 'file', name: 'excel', is_required: true, condition: { field_name: 'method', operation: 'eq', value: 'opt_1' } }];
   const variant = { product_id: 10, price_type: 'recommended' };
-  assert.equal(referenceForm({ items: fields }, variant, 150000).method, 'opt_0');
+  assert.deepEqual(referenceForm({ items: fields }, variant, 150000).method, ['opt_0']);
   assert.throws(() => referenceForm({ items: [...fields, { name: 'document', label: 'مدرک', is_required: true }] }, variant, 150000), /مدرک/);
   assert.throws(() => referenceForm({ items: fields }, { ...variant, price_type: 'printed' }, 150000), /سازگار/);
   assert.throws(() => referenceForm({ items: fields.slice(1) }, variant, 150000), /شرط/);

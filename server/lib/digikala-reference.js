@@ -15,11 +15,15 @@ function referenceForm(fields, variant, price) {
     const condition = modal.condition;
     const parent = items.find((x) => x.name === condition.field_name);
     if (condition.operation !== 'eq' || parent?.type !== 'select' || !parent.extra?.options?.some((o) => o.value === condition.value)) throw conflict('شرط انتخاب کالا در فرم قیمت مرجع شناخته‌شده نیست.');
-    form[parent.name] = condition.value;
+    // The Open API requires arrays for select fields, even when is_multi is false.
+    form[parent.name] = [condition.value];
   }
   for (const field of items) {
     if (!field.is_required || form[field.name] !== undefined || ['hint_box'].includes(field.type)) continue;
-    if (field.condition?.operation === 'eq' && form[field.condition.field_name] !== field.condition.value) continue;
+    if (field.condition?.operation === 'eq') {
+      const selected = form[field.condition.field_name];
+      if (!(Array.isArray(selected) ? selected.includes(field.condition.value) : selected === field.condition.value)) continue;
+    }
     throw conflict(`فرم قیمت مرجع به «${field.label || field.name}» نیاز دارد؛ از پنل دیجی‌کالا تکمیل کنید.`);
   }
   return form;

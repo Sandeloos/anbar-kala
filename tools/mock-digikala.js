@@ -126,7 +126,7 @@ function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3
       ] });
     }
     if (req.method === 'POST' && path === '/tickets/requests') {
-      if (body.form?.ticketing_input_method !== 'opt_0') return err(res, 400, 'Validation failed', { ticketing_input_method: ['روش انتخاب کالا الزامی است'] });
+      if (!Array.isArray(body.form?.ticketing_input_method) || body.form.ticketing_input_method.length !== 1 || body.form.ticketing_input_method[0] !== 'opt_0') return err(res, 400, 'Validation failed', { ticketing_input_method: ['روش انتخاب کالا الزامی است'] });
       const t = { id: 9000 + tickets.length, ...body };
       tickets.push(t);
       if (api.ticketResponseError) return err(res, 503, 'ticket created but response failed');
