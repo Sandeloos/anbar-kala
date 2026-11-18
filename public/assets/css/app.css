@@ -713,3 +713,11 @@ fieldset.field { border: 0; padding: 0; margin: 0; display: grid; gap: 6px; }
 .di-row [data-formula] { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
 .di-row [data-formula][hidden] { display: none; }
 .di-row [data-multiplier] { max-width: 180px; }
+
+/* Digikala operations: keep prices readable beside actions, including on phones. */
+.dk-operation-row .sub { display: block; line-height: 1.9; margin-block-start: 4px; }
+@media (max-width: 640px) {
+  .dk-operation-row { flex-direction: column; align-items: stretch; }
+  .dk-operation-row > .btn { align-self: flex-start; }
+  .dk-operation-row .title { white-space: normal; }
+}

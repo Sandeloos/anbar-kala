@@ -78,7 +78,7 @@ async function buildApp(config, { logger, fetchImpl } = {}) {
   const orders = createOrders({ db, sync, events, audit, stock });
   const returns = createReturns({ db, orders, stock, events, audit });
   const statements = createStatements({ db, audit, events });
-  const digikala = createDigikala({ db, secrets, audit, events, log: app.log, fetchImpl, retryBaseMs: config.production ? 1000 : 20 });
+  const digikala = createDigikala({ db, secrets, audit, events, orders, log: app.log, fetchImpl, retryBaseMs: config.production ? 1000 : 20 });
   const tasks = createTasks({ db, events, audit, settings, autoPriced: digikala.handles });
   sync.onChanges(tasks.onChanges);
   sync.onChanges(digikala.onChanges);

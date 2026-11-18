@@ -33,6 +33,11 @@ const OWNERS = {
   tasks: ['lib/tasks.js'],
   idempotency_keys: ['lib/idempotency.js'],
   dk_jobs: ['lib/digikala.js'],
+  dk_buybox: ['lib/digikala-buybox.js'],
+  dk_reference_requests: ['lib/digikala-reference.js'],
+  dk_remote_orders: ['lib/digikala-orders.js'],
+  dk_order_events: ['lib/digikala-orders.js'],
+  dk_operations_sync: ['lib/digikala-orders.js'],
   dk_connection: ['lib/digikala.js']
 };
 

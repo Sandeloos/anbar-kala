@@ -7,6 +7,7 @@ sync. No front-end build step. Technical map: `ARCHITECTURE.md`. What the owner 
 decision taken with them: `docs/decisions.md` (Persian) — read it before changing behaviour.
 
 ## Run and check
+- Owner's standing instruction (November 2026): publish every completed change to the live site after tests. Deploy through `main` and `tools/auto-deploy.sh` (database backup, rebuild and health verification); do not leave finished changes only on this computer. Verify the live site's `/health`, `/ready` and changed assets after deployment.
 - `npm install`, then `npm run demo` → http://127.0.0.1:8080 with three fake WooCommerce shops whose
   prices move every few seconds (demo / demo-1234 manager, ali / demo-1234 admin).
 - Real use: `MANAGER_USERNAME=… MANAGER_PASSWORD=… npm run db:seed`, then `npm run dev`.

@@ -67,4 +67,15 @@ module.exports = async function digikalaRoutes(app) {
   });
 
   app.post('/digikala/listings/:id/reprice', async (req) => ({ job: digikala.reprice(req, req.params.id) }));
+
+  app.get('/digikala/operations', async () => ({ reference: digikala.reference.list(), buybox: digikala.buybox.list(),
+    orders: digikala.orderSync.list(), sync: digikala.orderSync.state() }));
+  app.post('/digikala/reference/:id/check', async (req) => { await digikala.reference.refresh(req, req.params.id); return { ok: true }; });
+  app.post('/digikala/buybox/check', async () => { await digikala.buybox.scan(); return { ok: true }; });
+  app.post('/digikala/buybox/:id/approve', async (req) => {
+    const b = z.object({ price: intIn('قیمت پیشنهادی', 1, Number.MAX_SAFE_INTEGER) }).parse(req.body || {});
+    await digikala.buybox.approve(req, req.params.id, b.price);
+    return { ok: true };
+  });
+  app.post('/digikala/orders/sync', async (req) => digikala.orderSync.sync(req));
 };

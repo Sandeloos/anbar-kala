@@ -128,7 +128,7 @@ function createDigikalaClient({ baseUrl, tokens, fetchImpl, userAgent, timeoutMs
   }
 
   /** One call with: token refresh on 401 (once), back-off on 429/5xx/network (honours reset time). */
-  async function call(method, path, body) {
+  async function call(method, path, body, maxRetries = retries) {
     const t = tokens.get();
     if (t && t.expiresAt && new Date(t.expiresAt).getTime() < Date.now() + 60e3) await refresh();
     let refreshed = false;
@@ -137,7 +137,7 @@ function createDigikalaClient({ baseUrl, tokens, fetchImpl, userAgent, timeoutMs
         return await once(method, path, body);
       } catch (err) {
         if (err.status === 401 && !refreshed) { refreshed = true; await refresh(); attempt--; continue; }
-        if (!err.retryable || attempt >= retries) throw err;
+        if (!err.retryable || attempt >= maxRetries) throw err;
         await sleep(err.retryAfter ? Math.min(60e3, err.retryAfter * 1000) : retryBaseMs * 2 ** attempt);
       }
     }
@@ -159,7 +159,10 @@ function createDigikalaClient({ baseUrl, tokens, fetchImpl, userAgent, timeoutMs
     setActive: (id, active) => call('PUT', `/variants/${Number(id)}/activation`, { activation: !!active }),
     setStock: (id, stock) => call('PATCH', `/variants/${Number(id)}/seller-stock`, { seller_stock: stock }),
     ticketFields: (subCategoryId) => call('GET', `/tickets/sub-categories/${Number(subCategoryId)}/fields`),
-    createTicket: (subCategoryId, form) => call('POST', '/tickets/requests', { sub_category_id: Number(subCategoryId), form })
+    createTicket: (subCategoryId, form) => call('POST', '/tickets/requests', { sub_category_id: Number(subCategoryId), form }, 0),
+    ticket: async (id) => { const d = await call('GET', `/tickets/requests?search[request_id]=${encodeURIComponent(id)}&size=50`); return d?.items?.find((t) => String(t.id) === String(id)); },
+    buyboxSuggestion: (id) => call('GET', `/pricing/buybox/price-suggestion/winning-price?product_variant_id=${Number(id)}`),
+    orders: ({ page = 1, size = 50, type, from } = {}) => call('GET', type ? `/orders/history?page=${Number(page)}&size=${Number(size)}&order_type=${encodeURIComponent(type)}&order_created_at_from=${encodeURIComponent(from)}` : `/orders?page=${Number(page)}&size=${Number(size)}&sort=order_created_at&order=desc`)
   };
 }
 

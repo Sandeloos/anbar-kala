@@ -20,6 +20,8 @@ const crypto = require('crypto');
 function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3, userAgent = null, sellerId = 4242 } = {}) {
   const variants = new Map();
   const tickets = [];
+  const orders = [];
+  const orderHistory = [];
   const calls = [];
   const codes = new Set();
   const access = new Map(); // token → expiresAt
@@ -67,6 +69,19 @@ function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3
     if (wanted && req.headers['user-agent'] !== wanted) return err(res, 401, 'Invalid User-Agent!');
 
     let m;
+    if (req.method === 'GET' && (path === '/orders' || path === '/orders/history')) {
+      const all = path === '/orders' ? orders : orderHistory.filter((o) => o.type === url.searchParams.get('order_type'));
+      const page = Number(url.searchParams.get('page')) || 1;
+      const size = Number(url.searchParams.get('size')) || 50;
+      return ok(res, { items: all.slice((page - 1) * size, page * size), pager: { total_pages: Math.ceil(all.length / size) } });
+    }
+    if (req.method === 'GET' && path === '/pricing/buybox/price-suggestion/winning-price') {
+      const v = variants.get(Number(url.searchParams.get('product_variant_id')));
+      return ok(res, { suggested_price: v?.suggested_price ?? null });
+    }
+    if (req.method === 'GET' && path === '/tickets/requests') {
+      return ok(res, { items: tickets.filter((t) => String(t.id) === url.searchParams.get('search[request_id]')).map((t) => ({ ...t, status: t.status || 'in_progress' })) });
+    }
     if (req.method === 'GET' && path === '/variants') {
       const size = Math.min(100, Number(url.searchParams.get('size')) || 50);
       const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
@@ -108,18 +123,19 @@ function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3
     if (req.method === 'POST' && path === '/tickets/requests') {
       const t = { id: 9000 + tickets.length, ...body };
       tickets.push(t);
-      return ok(res, { id: t.id });
+      if (api.ticketResponseError) return err(res, 503, 'ticket created but response failed');
+      return ok(res, { request: { id: t.id } });
     }
     return err(res, 404, 'Data is not exist for your request.');
   }
 
   const api = {
-    variants, tickets, calls, userAgent,
+    variants, tickets, calls, userAgent, orders, orderHistory,
     get url() { return base; },
     /** Adds a seller variant (prices in rials). */
     addVariant(v) {
       const full = { description: v.description || '', product_description: v.product_description || '', id: v.id, product_id: v.product_id || v.id + 100000, title: v.title || (v.product_title ? '' : `تنوع ${v.id}`), product_title: v.product_title || '', supplier_code: v.supplier_code || '',
-        active: true, price_list: v.price_list, price_sale: v.price_sale ?? v.price_list,
+        active: true, is_buy_box_winner: v.is_buy_box_winner ?? null, buy_box_price: v.buy_box_price ?? null, suggested_price: v.suggested_price ?? null, price_list: v.price_list, price_sale: v.price_sale ?? v.price_list,
         credit_increase_percentage: v.credit_increase_percentage ?? 0, marketplace_seller_stock: v.marketplace_seller_stock ?? 10, product_url: `https://www.digikala.com/product/dkp-${v.product_id || v.id}/` };
       variants.set(v.id, full);
       return full;

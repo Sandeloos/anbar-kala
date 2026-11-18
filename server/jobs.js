@@ -21,6 +21,8 @@ function createJobs(ctx, log) {
   let busy = null;
   let stopped = false;
   let lastPrune = 0;
+  let lastDigikala = 0;
+  let lastBuybox = 0;
 
   /** One backup a day, at night (Tehran), if the last one is older than 20 hours; then the integrity check. */
   function nightly() {
@@ -78,6 +80,15 @@ function createJobs(ctx, log) {
         await syncDue();
         // Digikala price jobs waiting for a retry (the fresh ones start right away)
         if (ctx.digikala) await ctx.digikala.processDue();
+        if (ctx.digikala?.status().connected && Date.now() - lastDigikala > 5 * 60e3) {
+          lastDigikala = Date.now();
+          await ctx.digikala.orderSync.sync().catch((err) => log.warn({ err: err.message }, 'digikala orders sync failed'));
+          await ctx.digikala.reference.poll();
+          if (Date.now() - lastBuybox > 15 * 60e3) {
+            lastBuybox = Date.now();
+            await ctx.digikala.buybox.scan().catch((err) => log.warn({ err: err.message }, 'digikala buybox scan failed'));
+          }
+        }
       } finally {
         busy = null;
       }

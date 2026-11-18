@@ -15,6 +15,7 @@ const STATUS = {
 const badge = (s) => `<span class="badge ${(STATUS[s] || [])[1] || ''}">${esc((STATUS[s] || [s])[0])}</span>`;
 
 export async function render(view, ctx, params = []) {
+  if (params[0] === 'operations') return (await import('./digikala-operations.js')).render(view, ctx);
   if (params[0] === 'import') return (await import('./digikala-import.js')).render(view, ctx);
   view.innerHTML = skeleton(6);
   const isManager = ctx.me.role === 'manager';
@@ -82,7 +83,7 @@ export async function render(view, ctx, params = []) {
     const approval = d.attention.filter((j) => j.status === 'needs_approval');
     view.innerHTML = `
       <div class="page-head"><div><h1>قیمت دیجی‌کالا</h1><p>قیمت آگهی‌های دیجی‌کالا با تغییر قیمت سایت شرکت، با فرمول همان آگهی خودکار عوض می‌شود. فرمول هر بسته‌بندی را در «آگهی‌ها» تعیین کنید.</p></div>
-        <div class="page-actions"><a class="btn" href="#/listings?platform=1">${icon('link')}آگهی‌ها</a>${s.connected ? `<a class="btn btn-primary" href="#/digikala/import">${icon('download')}ورود آگهی‌ها از دیجی‌کالا</a>` : ''}</div></div>
+        <div class="page-actions"><a class="btn" href="#/digikala/operations">پیگیری دیجی‌کالا</a><a class="btn" href="#/listings?platform=1">${icon('link')}آگهی‌ها</a>${s.connected ? `<a class="btn btn-primary" href="#/digikala/import">${icon('download')}ورود آگهی‌ها از دیجی‌کالا</a>` : ''}</div></div>
       ${s.mode === 'dry_run' ? `<div class="callout callout-info">${icon('info')}<span>حالت آزمایشی: چیزی به دیجی‌کالا فرستاده نمی‌شود؛ فقط ثبت می‌شود که چه قیمتی فرستاده می‌شد.</span></div>` : ''}
       <div class="dk-grid">
         ${connection(s)}
@@ -94,7 +95,7 @@ export async function render(view, ctx, params = []) {
           </section>
           <section class="card" aria-labelledby="h-dk-blocked">
             <div class="card-head"><h2 id="h-dk-blocked">متوقف‌شده (${fa(d.blocked.length)})</h2></div>
-            <p class="small muted">دیجی‌کالا قیمت را نپذیرفت (خارج از بازه‌ی قیمت مرجع): تنوع غیرفعال، موجودی صفر و درخواست تغییر قیمت مرجع ثبت شد. بعد از تأیید قیمت مرجع، دوباره فعال کنید.</p>
+            <p class="small muted">دیجی‌کالا قیمت را نپذیرفت (خارج از بازه‌ی قیمت مرجع): تلاش برای غیرفعال‌سازی و صفر کردن موجودی انجام شده؛ نتیجه و وضعیت درخواست را در «پیگیری دیجی‌کالا» ببینید. بعد از تأیید قیمت مرجع، دوباره فعال کنید.</p>
             ${d.blocked.length ? `<div class="list">${d.blocked.map((l) => `<div class="list-item"><span class="grow"><span class="title">${esc(l.product_name)} <span class="ltr small muted">${esc(l.code || '')}</span></span>
               <span class="sub"><span>${esc(l.company_name)}</span><span>موجودی قبلی ${fa(l.dk_stock_before)}</span><span>${ago(l.updated_at)}</span></span></span>
               <button class="btn btn-sm" type="button" data-reactivate="${l.id}" data-stock="${l.dk_stock_before ?? ''}">${icon('refresh')}فعال‌سازی دوباره</button></div>`).join('')}</div>` : empty('check', 'تنوع متوقفی نیست')}

@@ -54,3 +54,19 @@ public key, the panel shows an authorization code encrypted with it (base64, PKC
   claim, so the client builds the header itself; `dk_connection.user_agent` (manager) overrides it if Digikala
   changes the rule. The mock issues JWT-shaped tokens with `seller_id` and enforces the rule (`userAgent: 'trusted'`).
 - The self-token is valid for 360 days (the seller panel's own figure), not six months.
+
+## Addendum: operational tracking (November 2026)
+Reference requests, buybox decisions and remote order ingestion live in separate domain modules.
+Migration 009 adds durable operational records without changing shipped migrations or ledger owners.
+The official specification is at `/open-api/v1/doc/specification.yml` (linked from `/doc/`).
+- Buybox: `GET pricing/buybox/price-suggestion/winning-price?product_variant_id=…` returns nullable
+  `suggested_price` in rials. Only explicit `is_buy_box_winner=false` plus a lower official suggestion
+  enables approval. Re-read before sending; an approved reduction expires when the base formula changes.
+- Tickets: creation returns `data.request.id`; status is read through `GET tickets/requests` filtered by
+  `search[request_id]`. Creation is not retried on network/5xx errors: an ambiguous response must not
+  generate duplicate requests. A local pending record survives missing category configuration.
+- Orders: `GET orders` and `GET orders/history?order_type=processed|returned|canceled` return **lines**,
+  not nested orders. Group after reading all pages. Retain remote snapshots and status events, and let
+  `orders.createOrder` freeze company prices using price history. Pending mappings retry after later
+  matching. External cancellation/return status is flagged for review, never applied to stock implicitly.
+- Jobs poll orders/reference every 5 minutes and buybox every 15 minutes; no live API is called by tests.

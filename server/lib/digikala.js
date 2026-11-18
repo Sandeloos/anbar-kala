@@ -26,6 +26,9 @@ const crypto = require('crypto');
 const { nowIso, badRequest, notFound, conflict, searchKey } = require('./util');
 const { createDigikalaClient, decryptChallenge, checkPrivateKey, DigikalaError, DEFAULT_USER_AGENT, trustedUserAgent, sellerIdOf } = require('./digikala-api');
 const { guessUnits } = require('./sync');
+const { createReferenceRequests } = require('./digikala-reference');
+const { createBuybox } = require('./digikala-buybox');
+const { createDigikalaOrders } = require('./digikala-orders');
 const { plain, readProductDescription } = require('./product-content');
 
 const MODES = { off: 'خاموش', dry_run: 'آزمایشی (چیزی فرستاده نمی‌شود)', live: 'فعال' };
@@ -47,7 +50,7 @@ function variantIdOf(code) {
   return m ? Number(m[1]) : null;
 }
 
-function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseMs = 1000 }) {
+function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, retryBaseMs = 1000 }) {
   const conn = () => db.get('SELECT * FROM dk_connection WHERE id = 1');
   const platformId = () => (db.get("SELECT id FROM platforms WHERE code = 'digikala'") || {}).id;
   const dec = (v) => (v ? secrets.decrypt(v) : null);
@@ -63,6 +66,10 @@ function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseM
     }
   };
   const client = () => { const c = conn(); return createDigikalaClient({ baseUrl: c.base_url, userAgent: c.user_agent, tokens, fetchImpl, retryBaseMs }); };
+
+  const reference = createReferenceRequests({ db, client, connection: conn, audit, events });
+  const buybox = createBuybox({ db, client, connection: conn, audit, events, priceFor, variantIdOf, onRefused: buyboxRefused });
+  const orderSync = createDigikalaOrders({ db, client, connection: conn, orders, audit, events });
 
   /* ------------------------------------------------------------ connection (manager) */
   function status() {
@@ -193,7 +200,7 @@ function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseM
       const mode = conn().mode;
       if (mode === 'off') break;
       const job = db.get(`SELECT * FROM dk_jobs WHERE status IN ('pending', 'approved') AND (next_at IS NULL OR next_at <= ?) ORDER BY id LIMIT 1`, nowIso());
-      if (!job) break;
+      if (!job || buybox.isLocked(job.listing_id)) break;
       await processJob(job, mode);
     }
     return done;
@@ -232,6 +239,7 @@ function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseM
     if (!vid) return finish(job, { status: 'failed', error: 'کد تنوع دیجی‌کالا (DKPC) برای این آگهی ثبت نشده.' }, null);
     const f = priceFor(l, l);
     if (!f) return finish(job, { status: 'failed', error: 'قیمت سایت یا حاشیه‌ی سود این آگهی معلوم نیست.' });
+    f.price = buybox.effectivePrice(l.id, f.price);
     const api = client();
     let v;
     try {
@@ -263,6 +271,14 @@ function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseM
     }
   }
 
+  async function buyboxRefused(l, v, price, err) {
+    const now = nowIso();
+    const id = db.tx(() => Number(db.run(`INSERT INTO dk_jobs (listing_id, status, reason, target_price, current_price, created_at, updated_at)
+      VALUES (?, 'rejected', 'buybox', ?, ?, ?, ?)`, l.id, price, v.price_sale, now, now).lastInsertRowid));
+    const job = db.get('SELECT * FROM dk_jobs WHERE id = ?', id);
+    await refuse(job, l, variantIdOf(l.code), v, { target_price: price, current_price: v.price_sale, reference_price: v.price_list }, err, l.code);
+  }
+
   /** The price is outside what Digikala accepts: off, stock 0, reference-price ticket. */
   async function refuse(job, l, vid, v, base, err, name) {
     const api = client();
@@ -270,24 +286,11 @@ function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseM
     const stockBefore = v.marketplace_seller_stock ?? null;
     try { await api.setActive(vid, false); done.deactivated = true; } catch (e) { done.deactivate_error = e.message; }
     try { await api.setStock(vid, 0); done.stock_zero = true; } catch (e) { done.stock_error = e.message; }
-    done.ticket = await referenceTicket(v, base.target_price).catch((e) => ({ error: e.message }));
+    done.ticket = await reference.submit(job, v, base.target_price).catch((e) => ({ error: e.message }));
     const ticketText = done.ticket && done.ticket.id ? `تیکت قیمت مرجع ${done.ticket.id} ثبت شد` : 'تیکت قیمت مرجع باید دستی ثبت شود';
     return finish(job, { ...base, status: 'rejected', error: done.refused, result: JSON.stringify(done) },
       `دیجی‌کالا قیمت ${name} را نپذیرفت (${done.refused}): ${done.deactivated ? 'غیرفعال شد' : 'غیرفعال نشد!'}، ${done.stock_zero ? 'موجودی صفر شد' : 'موجودی صفر نشد!'}، ${ticketText}`,
       { listing: { dk_state: 'blocked', dk_stock_before: stockBefore } });
-  }
-
-  /** Opens the reference-price ticket when its sub-category is configured; null otherwise (manual). */
-  async function referenceTicket(variant, price) {
-    const sub = conn().ticket_sub_category_id;
-    if (!sub) return null;
-    const api = client();
-    const fields = await api.ticketFields(sub);
-    const items = (fields && (fields.items || fields)) || [];
-    const modal = items.find((x) => x && x.type === 'dynamic_modal');
-    if (!modal || !modal.name) throw new Error('فرم تیکت قیمت مرجع فیلد کالا ندارد.');
-    const t = await api.createTicket(sub, { [modal.name]: [{ product_id: variant.product_id, new_reference_price: price, is_registered_in_124: false, link: variant.product_url || '' }] });
-    return { id: t && (t.id || t.ticket_id) ? t.id || t.ticket_id : 'ok' };
   }
 
   function failOrRetry(job, err, base = {}) {
@@ -495,7 +498,7 @@ function createDigikala({ db, secrets, audit, events, log, fetchImpl, retryBaseM
   }
 
   return {
-    status, setKey, connect, setSettings, enqueue, onChanges, handles, kick, processDue, approve, reject, reactivate, reprice, jobs, blocked,
+    reference, buybox, orderSync, status, setKey, connect, setSettings, enqueue, onChanges, handles, kick, processDue, approve, reject, reactivate, reprice, jobs, blocked,
     importPreview, importCreate, priceFor, variantIdOf, MODES
   };
 }

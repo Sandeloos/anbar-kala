@@ -119,6 +119,7 @@ export async function render(view) {
         ${[['all', 'همه'], ['sure', 'پیشنهاد مطمئن'], ['check', 'نیاز به بررسی'], ['none', 'بدون پیشنهاد']].map(([k, t]) => `<button type="button" data-f="${k}" aria-pressed="${filter === k}">${t} <small>${fa(n(k))}</small></button>`).join('')}
       </div>
       <section class="card" aria-label="تنوع‌های دیجی‌کالا"><div class="list">${data.items.map(row).join('')}</div><p id="di-no-matches" class="small muted" hidden>در این فیلتر موردی نیست؛ فیلتر دیگری انتخاب کنید.</p></section><div class="form-actions"><button class="btn" id="di-prev">قبلی</button><span id="di-page"></span><button class="btn" id="di-next">بعدی</button></div>
+      <div class="card"><div class="field"><label for="di-bulk-multiplier">ضریب گروهی برای همهٔ انتخاب‌شده‌ها (حتی صفحات دیگر)</label><input id="di-bulk-multiplier" inputmode="decimal" value="۱٫۳"></div><button class="btn" type="button" id="di-bulk-apply">اعمال ضریب به انتخاب‌شده‌ها</button><p class="small muted">قبل از تأیید اتصال، قیمت هر ردیف را بررسی کنید. ضریب گروهی جای ضریب قبلی انتخاب‌شده‌ها می‌نشیند.</p></div>
       <div class="di-bar"><span id="di-count"></span><button class="btn btn-primary" type="button" id="di-save">${icon('check')}تأیید اتصال آگهی‌ها</button></div></div>`;
     $$('.di-row', box).forEach((r) => {
       const draft = drafts.get(r.dataset.v);
@@ -251,7 +252,19 @@ export async function render(view) {
   view.onclick = (e) => {
     const b = e.target.closest('button');
     if (!b) return;
-    if (b.hasAttribute('data-formula-toggle')) {
+    if (b.id === 'di-bulk-apply') {
+      const multiplier = Number(latin($('#di-bulk-multiplier', view).value));
+      if (!Number.isFinite(multiplier) || multiplier < 0.5 || multiplier > 11) return toast('ضریب قیمت باید بین ۰٫۵ و ۱۱ باشد.', { error: true });
+      const rows = $$('.di-row', view).filter((r) => $('[data-pick]', r).checked);
+      if (!rows.length) return toast('ابتدا تنوع‌ها را انتخاب کنید.', { error: true });
+      rows.forEach((r) => {
+        $('[data-multiplier]', r).value = fa(multiplier);
+        $('[data-formula]', r).hidden = false;
+        $('[data-formula-toggle]', r).setAttribute('aria-expanded', 'true');
+        hint(r);
+      });
+      toast(`ضریب ${fa(multiplier)} برای ${fa(rows.length)} تنوع اعمال شد؛ برای ذخیره «تأیید اتصال آگهی‌ها» را بزنید.`);
+    } else if (b.hasAttribute('data-formula-toggle')) {
       const row = b.closest('.di-row');
       const formula = $('[data-formula]', row);
       formula.hidden = !formula.hidden;
