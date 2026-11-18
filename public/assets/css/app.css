@@ -721,3 +721,5 @@ fieldset.field { border: 0; padding: 0; margin: 0; display: grid; gap: 6px; }
   .dk-operation-row > .btn { align-self: flex-start; }
   .dk-operation-row .title { white-space: normal; }
 }
+
+.changes .change-error .to { color: var(--red); }

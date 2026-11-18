@@ -48,7 +48,7 @@ export async function render(view, ctx, params = []) {
             <option value="dry_run"${s.mode === 'dry_run' ? ' selected' : ''}>آزمایشی</option>
             <option value="live"${s.mode === 'live' ? ' selected' : ''}${s.connected ? '' : ' disabled'}>فعال</option></select><span class="hint">آزمایشی: فقط ثبت می‌شود، چیزی فرستاده نمی‌شود</span></div>
           <div class="field"><label for="dk-max">سقف تغییر خودکار (٪)</label><input id="dk-max" name="max_change_pct" inputmode="numeric" value="${fa(s.max_change_pct)}"><span class="hint">تغییر بیشتر منتظر تأیید می‌ماند</span></div>
-          <div class="field"><label for="dk-ticket">زیردسته‌ی تیکت قیمت مرجع</label><input id="dk-ticket" name="ticket_sub_category_id" inputmode="numeric" dir="ltr" value="${s.ticket_sub_category_id || ''}"><span class="hint">خالی یعنی تیکت دستی ثبت شود</span></div>
+          <div class="field"><label for="dk-ticket">زیردسته‌ی تیکت قیمت مرجع</label><input id="dk-ticket" name="ticket_sub_category_id" inputmode="numeric" dir="ltr" value="${s.ticket_sub_category_id || ''}"><span class="hint">خالی: فرم مناسب با نوع قیمت کالا خودکار از دیجی‌کالا خوانده می‌شود</span></div>
         </div>
         <div class="field"><label for="dk-ua">User-Agent</label><input id="dk-ua" name="user_agent" dir="ltr" autocomplete="off" spellcheck="false" value="${esc(s.user_agent || '')}" placeholder="${esc(s.auto_user_agent || '')}">
           <span class="hint">خالی بگذارید: دیجی‌کالا «DigikalaTrustedBot/SelfToken/کد فروشندگی» می‌خواهد و همین خودکار فرستاده می‌شود. فقط اگر دیجی‌کالا مقدار دیگری گفت اینجا بنویسید.</span></div>

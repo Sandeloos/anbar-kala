@@ -158,6 +158,7 @@ function createDigikalaClient({ baseUrl, tokens, fetchImpl, userAgent, timeoutMs
     setPrice: (id, price, creditIncrease) => call('PATCH', '/variants/selling-price', { variant_id: Number(id), selling_price: price, credit_increase_percentage: creditIncrease }),
     setActive: (id, active) => call('PUT', `/variants/${Number(id)}/activation`, { activation: !!active }),
     setStock: (id, stock) => call('PATCH', `/variants/${Number(id)}/seller-stock`, { seller_stock: stock }),
+    ticketCategories: () => call('GET', '/tickets/categories'),
     ticketFields: (subCategoryId) => call('GET', `/tickets/sub-categories/${Number(subCategoryId)}/fields`),
     createTicket: (subCategoryId, form) => call('POST', '/tickets/requests', { sub_category_id: Number(subCategoryId), form }, 0),
     ticket: async (id) => { const d = await call('GET', `/tickets/requests?search[request_id]=${encodeURIComponent(id)}&size=50`); return d?.items?.find((t) => String(t.id) === String(id)); },

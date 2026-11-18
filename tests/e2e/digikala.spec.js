@@ -94,3 +94,22 @@ test('operations shows price reductions, reference tracking and order history on
   await expect(page.locator('#do-list details[open]')).toContainText('جاری');
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
 });
+
+test('reference activity uses Persian labels and renders an error as an error', async ({ page }) => {
+  await page.goto('/');
+  await page.fill('#login-username', 'boss');
+  await page.fill('#login-password', 'boss-password-1');
+  await page.click('#login-form button[type=submit]');
+  await expect(page.locator('#shell')).toBeVisible();
+  await page.route('**/api/activity?*', (route) => route.fulfill({ json: { total: 1, page: 1, pages: 1, items: [{
+    id: 1, entity: 'listing', action: 'digikala', entity_id: '1', user_name: 'مدیر', created_at: new Date().toISOString(),
+    summary: 'پیگیری درخواست قیمت مرجع دیجی‌کالا: pending ← pending',
+    changes: [{ field: 'error', label: 'خطا', from: null, to: 'درخواست ارسال نشده؛ زیردستهٔ تیکت را تنظیم کنید.' }]
+  }] } }));
+  await page.goto('/#/activity');
+  await expect(page.locator('#a-list')).toContainText('در انتظار ارسال (بدون تغییر وضعیت)');
+  await expect(page.locator('#a-list')).toContainText('آگهی · دیجی‌کالا');
+  await expect(page.locator('#a-list')).not.toContainText('pending');
+  await expect(page.locator('.change-error .to')).toHaveText('درخواست ارسال نشده؛ زیردستهٔ تیکت را تنظیم کنید.');
+  await expect(page.locator('.change-error .to')).toHaveCSS('color', 'rgb(196, 50, 10)');
+});

@@ -362,6 +362,10 @@ test('reference requests persist, track real ticket status, and wait for configu
   assert.equal(records.length, 1);
   assert.equal(records[0].status, 'pending');
   assert.match(records[0].error, /زیردسته/);
+  const logsBefore = ctx.db.get("SELECT COUNT(*) n FROM audit_log WHERE action = 'digikala'").n;
+  assert.equal((await api.post(`/api/digikala/reference/${records[0].id}/check`)).status, 409, 'missing configuration is not a success');
+  assert.equal((await api.post(`/api/digikala/reference/${records[0].id}/check`)).status, 409);
+  assert.equal(ctx.db.get("SELECT COUNT(*) n FROM audit_log WHERE action = 'digikala'").n, logsBefore, 'unchanged checks do not flood the log');
   await api.put('/api/digikala/settings', { ticket_sub_category_id: 77 });
   const checks = await Promise.all([api.post(`/api/digikala/reference/${records[0].id}/check`), api.post(`/api/digikala/reference/${records[0].id}/check`)]);
   assert.ok(checks.every((r) => r.status === 200));
@@ -480,4 +484,45 @@ test('a reference-price refusal of a manually approved buybox suggestion opens t
   assert.equal(dk.tickets.length, 1);
   assert.equal(ctx.db.get('SELECT dk_state FROM listings WHERE id = ?', l.id).dk_state, 'blocked');
   assert.equal(c.digikala.buybox.list()[0].suggested_price, null);
+});
+
+test('reference forms are discovered from the seller account for each pricing type without a manual category id', async (t) => {
+  const env = await setup(t);
+  const { api, dk, c, product, ctx } = env;
+  const target = formulaPrice(product);
+  dk.ticketCategories = [{ id: 13, sub_categories: [
+    { id: 113, title: 'فرم درخواست ثبت قیمت مرجع – قیمت پیشنهادی', provider: 'pricing' },
+    { id: 111, title: 'فرم درخواست ثبت قیمت مرجع – قیمت چاپ شده', provider: 'pricing' },
+    { id: 112, title: 'فرم درخواست ثبت قیمت مرجع – قیمت مصوب', provider: 'pricing' },
+    { id: 512, title: 'نحوه تغییر قیمت مرجع', provider: 'sss' }
+  ] }];
+  await connectAndList(env, { variant: { price_list: Math.round(target / 3), price_sale: target - 10000 } });
+  for (const [id, type] of [[502, 'printed'], [503, 'regulated']]) {
+    dk.addVariant({ id, price_type: type, price_list: Math.round(target / 3), price_sale: target - 10000 });
+    const r = await api.post('/api/listings', { platform_id: 1, product_id: product.id, code: String(id), units: 1, auto_price: true, margin_pct: 30, fixed_add: '', round_to: '1000' });
+    assert.equal(r.status, 200);
+  }
+  await api.put('/api/digikala/settings', { mode: 'live' });
+  await c.digikala.kick();
+  assert.deepEqual(dk.tickets.map((t) => t.sub_category_id).sort(), [111, 112, 113]);
+  assert.ok(c.digikala.reference.list().every((r) => r.status === 'submitted' && r.ticket_id));
+  assert.equal(ctx.db.get('SELECT ticket_sub_category_id FROM dk_connection').ticket_sub_category_id, null, 'per-type discovery does not force a global override');
+  assert.equal(dk.calls.filter((r) => r.path === '/tickets/categories').length, 1, 'category list is cached across variants');
+  const id = c.digikala.reference.list()[0].id;
+  await api.post(`/api/digikala/reference/${id}/check`);
+  const logs = ctx.db.get("SELECT COUNT(*) n FROM audit_log WHERE action = 'digikala'").n;
+  await api.post(`/api/digikala/reference/${id}/check`);
+  assert.equal(ctx.db.get("SELECT COUNT(*) n FROM audit_log WHERE action = 'digikala'").n, logs, 'same remote status does not create another audit entry');
+});
+
+test('reference form selects the required product branch and refuses incomplete or incompatible forms before posting', () => {
+  const { referenceForm } = require('../../server/lib/digikala-reference');
+  const fields = [{ type: 'select', name: 'method', is_required: true, extra: { options: [{ value: 'opt_0' }] } },
+    { type: 'dynamic_modal', name: 'products', extra: { price_type: 'recommended' }, condition: { field_name: 'method', operation: 'eq', value: 'opt_0' } },
+    { type: 'file', name: 'excel', is_required: true, condition: { field_name: 'method', operation: 'eq', value: 'opt_1' } }];
+  const variant = { product_id: 10, price_type: 'recommended' };
+  assert.equal(referenceForm({ items: fields }, variant, 150000).method, 'opt_0');
+  assert.throws(() => referenceForm({ items: [...fields, { name: 'document', label: 'مدرک', is_required: true }] }, variant, 150000), /مدرک/);
+  assert.throws(() => referenceForm({ items: fields }, { ...variant, price_type: 'printed' }, 150000), /سازگار/);
+  assert.throws(() => referenceForm({ items: fields.slice(1) }, variant, 150000), /شرط/);
 });

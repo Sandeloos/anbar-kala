@@ -117,10 +117,16 @@ function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3
       v.marketplace_seller_stock = Number(body.seller_stock);
       return ok(res, { selling_stock: v.marketplace_seller_stock, marketplace_seller_stock: v.marketplace_seller_stock });
     }
+    if (req.method === 'GET' && path === '/tickets/categories') return ok(res, { items: api.ticketCategories || [] });
     if (req.method === 'GET' && /^\/tickets\/sub-categories\/\d+\/fields$/.test(path)) {
-      return ok(res, { items: [{ type: 'string', name: 'ticketing_input_1' }, { type: 'dynamic_modal', name: 'ticketing_input_1214' }] });
+      return ok(res, { items: [
+        { type: 'select', name: 'ticketing_input_method', is_required: true, extra: { options: [{ value: 'opt_0' }, { value: 'opt_1' }] } },
+        { type: 'dynamic_modal', name: 'ticketing_input_1214', is_required: true, condition: { field_name: 'ticketing_input_method', operation: 'eq', value: 'opt_0' } },
+        { type: 'file', name: 'ticketing_input_file', is_required: true, condition: { field_name: 'ticketing_input_method', operation: 'eq', value: 'opt_1' } }
+      ] });
     }
     if (req.method === 'POST' && path === '/tickets/requests') {
+      if (body.form?.ticketing_input_method !== 'opt_0') return err(res, 400, 'Validation failed', { ticketing_input_method: ['روش انتخاب کالا الزامی است'] });
       const t = { id: 9000 + tickets.length, ...body };
       tickets.push(t);
       if (api.ticketResponseError) return err(res, 503, 'ticket created but response failed');
@@ -135,7 +141,7 @@ function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3
     /** Adds a seller variant (prices in rials). */
     addVariant(v) {
       const full = { description: v.description || '', product_description: v.product_description || '', id: v.id, product_id: v.product_id || v.id + 100000, title: v.title || (v.product_title ? '' : `تنوع ${v.id}`), product_title: v.product_title || '', supplier_code: v.supplier_code || '',
-        active: true, is_buy_box_winner: v.is_buy_box_winner ?? null, buy_box_price: v.buy_box_price ?? null, suggested_price: v.suggested_price ?? null, price_list: v.price_list, price_sale: v.price_sale ?? v.price_list,
+        active: true, price_type: v.price_type ?? 'recommended', is_buy_box_winner: v.is_buy_box_winner ?? null, buy_box_price: v.buy_box_price ?? null, suggested_price: v.suggested_price ?? null, price_list: v.price_list, price_sale: v.price_sale ?? v.price_list,
         credit_increase_percentage: v.credit_increase_percentage ?? 0, marketplace_seller_stock: v.marketplace_seller_stock ?? 10, product_url: `https://www.digikala.com/product/dkp-${v.product_id || v.id}/` };
       variants.set(v.id, full);
       return full;
