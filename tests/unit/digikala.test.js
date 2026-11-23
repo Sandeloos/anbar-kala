@@ -71,7 +71,7 @@ test('Digikala work list reads official prices and packages without counting int
   assert.equal(sections.returned.summary.total, 210000);
   assert.deepEqual(rs.body.sales, { orders: 4, total: 100000, overlaps: 1, omitted: 5 });
   assert.equal(dk.calls.filter(r => r.path === '/auth/refresh-token').length, 1);
-  assert.ok(dk.calls.some(r => r.path === '/orders' && r.query['search[created_today]'] === 'true' && r.query.page === '2'));
+  assert.ok(dk.calls.some(r => r.path === '/orders' && !('search[created_today]' in r.query) && r.query.page === '2'));
   assert.ok(dk.calls.some(r => r.path === '/orders/history' && r.query.order_created_at_from === from && r.query.order_created_at_to === to));
   assert.ok(dk.calls.some(r => r.path === '/packages' && r.query['search[type]'] === 'order_fulfilment'));
   assert.deepEqual(ps.body.items.map(r => r.id), ['88']);

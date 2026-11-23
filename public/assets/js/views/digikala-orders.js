@@ -174,7 +174,8 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
         : '<p class="small muted">قلمی در جزئیات محموله گزارش نشده است.</p>';
     } catch (err) {
       delete details.dataset.loaded;
-      body.innerHTML = errorBox(err.message);
+      body.innerHTML = `${errorBox(err.message)}<a class="link small" href="https://seller.digikala.com/pwa/packages/${details.dataset.packageId}"
+        target="_blank" rel="noopener noreferrer">مشاهدهٔ همین محموله در پنل فروشندگان دیجیکالا</a>`;
     }
   }, true);
 

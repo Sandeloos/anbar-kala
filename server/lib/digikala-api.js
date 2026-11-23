@@ -17,6 +17,7 @@
  * Errors are DigikalaError with `status` and Digikala's `errors` object (e.g. errors.selling_price).
  */
 const crypto = require('crypto');
+const { setTimeout: sleep } = require('node:timers/promises');
 
 class DigikalaError extends Error {
   constructor(message, { status = 0, errors = null, code = 'http', retryAfter = null, cause } = {}) {
@@ -89,9 +90,7 @@ function sellerIdOf(accessToken) {
 function createDigikalaClient({ baseUrl, tokens, fetchImpl, userAgent, timeoutMs = 20000, retries = 2, retryBaseMs = 1000 }) {
   const doFetch = fetchImpl || globalThis.fetch;
   const root = String(baseUrl || 'https://seller.digikala.com').replace(/\/+$/, '') + '/open-api/v1';
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-  async function once(method, path, body, { auth = true } = {}) {
+  async function once(method, path, body, { auth = true, signal } = {}) {
     const t = auth ? tokens.get() : null;
     if (auth && (!t || !t.access)) throw new DigikalaError('اتصال دیجی‌کالا برقرار نیست؛ از «قیمت دیجی‌کالا» دوباره وصل شوید.', { code: 'no_token' });
     const seller = t ? sellerIdOf(t.access) : null;
@@ -99,15 +98,17 @@ function createDigikalaClient({ baseUrl, tokens, fetchImpl, userAgent, timeoutMs
     if (t) headers.authorization = `Bearer ${t.access}`;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-    let res;
+    let res, text;
     try {
-      res = await doFetch(root + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: ctrl.signal });
+      res = await doFetch(root + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body),
+        signal: signal ? AbortSignal.any([ctrl.signal, signal]) : ctrl.signal });
+      text = await res.text();
     } catch (err) {
-      throw new DigikalaError(err.name === 'AbortError' ? 'دیجی‌کالا جواب نداد.' : 'اتصال به دیجی‌کالا برقرار نشد.', { code: err.name === 'AbortError' ? 'timeout' : 'network', cause: err });
+      const timeout = ctrl.signal.aborted || signal?.aborted || err.name === 'AbortError';
+      throw new DigikalaError(timeout ? 'دیجی‌کالا جواب نداد.' : 'اتصال به دیجی‌کالا برقرار نشد.', { code: timeout ? 'timeout' : 'network', cause: err });
     } finally {
       clearTimeout(timer);
     }
-    const text = await res.text();
     let data;
     try { data = text ? JSON.parse(text) : null; } catch { data = null; }
     if (res.ok && (!data || data.status !== 'error')) return data && data.data !== undefined ? data.data : data;
@@ -133,14 +134,15 @@ function createDigikalaClient({ baseUrl, tokens, fetchImpl, userAgent, timeoutMs
   }
 
   /** One call with: token refresh on 401 (once), back-off on 429/5xx/network (honours reset time). */
-  async function call(method, path, body, maxRetries = retries) {
+  async function call(method, path, body, maxRetries = retries, signal) {
     const t = tokens.get();
     if (t && t.expiresAt && new Date(t.expiresAt).getTime() < Date.now() + 60e3) await refresh();
     let refreshed = false;
     for (let attempt = 0; ; attempt++) {
+      signal?.throwIfAborted();
       const access = tokens.get()?.access;
       try {
-        return await once(method, path, body);
+        return await once(method, path, body, { signal });
       } catch (err) {
         if (err.status === 401 && !refreshed) {
           refreshed = true;
@@ -148,8 +150,8 @@ function createDigikalaClient({ baseUrl, tokens, fetchImpl, userAgent, timeoutMs
           attempt--;
           continue;
         }
-        if (!err.retryable || attempt >= maxRetries) throw err;
-        await sleep(err.retryAfter ? Math.min(60e3, err.retryAfter * 1000) : retryBaseMs * 2 ** attempt);
+        if (signal?.aborted || !err.retryable || attempt >= maxRetries) throw err;
+        await sleep(err.retryAfter ? Math.min(60e3, err.retryAfter * 1000) : retryBaseMs * 2 ** attempt, undefined, { signal });
       }
     }
   }
@@ -191,22 +193,22 @@ function createDigikalaClient({ baseUrl, tokens, fetchImpl, userAgent, timeoutMs
     ticketsByIds,
     ticket: async (id) => (await ticketsByIds([id]))[0],
     buyboxSuggestion: (id) => call('GET', `/pricing/buybox/price-suggestion/winning-price?product_variant_id=${Number(id)}`),
-    orders({ page = 1, size = 50, type, from, to, today } = {}) {
+    orders({ page = 1, size = 50, type, from, to, signal } = {}) {
       const q = new URLSearchParams({ page, size, sort: type ? 'id' : 'order_created_at', order: 'desc' });
       if (type) {
         q.set('order_type', type);
         if (from) q.set('order_created_at_from', from);
         if (to) q.set('order_created_at_to', to);
-      } else if (today) q.set('search[created_today]', 'true');
-      return call('GET', `/orders${type ? '/history' : ''}?${q}`);
+      }
+      return call('GET', `/orders${type ? '/history' : ''}?${q}`, undefined, retries, signal);
     },
-    packages({ page, size, from, to }) {
+    packages({ page, size, from, to, signal }) {
       const q = new URLSearchParams({ page, size, sort: 'created_at', order: 'desc',
         'search[type]': 'order_fulfilment', 'search[package_created_at_from]': from, 'search[package_created_at_to]': to });
-      return call('GET', `/packages?${q}`);
+      return call('GET', `/packages?${q}`, undefined, retries, signal);
     },
-    packageDetails({ id, page }) {
-      return call('GET', page === 1 ? `/packages/${id}` : `/packages/${id}?page=${page}`);
+    packageDetails({ id, page, signal }) {
+      return call('GET', page === 1 ? `/packages/${id}` : `/packages/${id}?page=${page}`, undefined, retries, signal);
     }
   };
 }

@@ -23,18 +23,19 @@ const inRange = (value, { from, to }) => value && value >= from && value < to;
 function reportRange(from, to, now = new Date()) {
   const start = dayStart(tehranDay(now.toISOString()).date);
   const end = new Date(Date.parse(start) + DAY).toISOString();
-  if (!from && !to) return { from: start, to: end, today: true };
+  if (!from && !to) return { from: start, to: end };
   const range = { from: iso(from), to: iso(to) };
   if (!range.from || !range.to || range.from >= range.to || Date.parse(range.to) - Date.parse(range.from) > 31 * DAY) {
     throw badRequest('بازهٔ گزارش باید معتبر و حداکثر ۳۱ روز باشد.');
   }
-  return { ...range, today: range.from === start && range.to === end };
+  return range;
 }
 
 async function paged(fetchPage) {
   const items = [];
+  const signal = AbortSignal.timeout(25_000);
   for (let page = 1; page <= 200; page++) {
-    const result = await fetchPage(page);
+    const result = await fetchPage(page, signal);
     if (!Array.isArray(result?.items)) throw new Error('Invalid Digikala list');
     items.push(...result.items);
     const pages = number(result.pager?.total_pages);
@@ -82,6 +83,9 @@ function errorFor(err) {
   if (err.status === 403) return 'دسترسی این بخش در اتصال دیجیکالا فعال نیست.';
   if (err.status === 401 || err.code === 'no_token') return 'اتصال دیجیکالا نیاز به ورود دوباره دارد.';
   if (err.status === 429) return 'سقف درخواست‌های دیجیکالا پر شده است. کمی بعد دوباره تلاش کنید.';
+  if (err.code === 'timeout' || err.name === 'TimeoutError' || err.name === 'AbortError') return 'دیجیکالا در زمان مقرر پاسخ کامل نداد. دوباره تلاش کنید.';
+  if (err.status === 404) return 'دیجیکالا جزئیات این مورد را در API پیدا نکرد.';
+  if (err.status === 400) return 'دیجیکالا درخواست خواندن این بخش را نپذیرفت.';
   return 'پاسخ کامل از دیجیکالا دریافت نشد. دوباره تلاش کنید.';
 }
 
@@ -150,8 +154,10 @@ function createOrderReport({ db, client, connection, variantIdOf, log }) {
     const window = reportRange(from, to);
     const kinds = requested === 'sales' ? ['active', 'processed'] : requested ? [requested] : ORDER_SECTIONS;
     const responses = await Promise.all(kinds.map(kind => section([kind, window.from, window.to], async api => {
-      const raw = await paged(page => api.orders({ page, size: PAGE_SIZE,
-        ...(kind === 'active' ? { today: window.today } : { type: kind, from: window.from, to: window.to }) }));
+      // The vendor's created_today filter omitted confirmed active orders in production.
+      // Apply the same Tehran interval to the actual timestamps returned by the API.
+      const raw = await paged((page, signal) => api.orders({ page, size: PAGE_SIZE, signal,
+        ...(kind === 'active' ? {} : { type: kind, from: window.from, to: window.to }) }));
       return { ...uniqueOrderLines(raw, kind, window), fetched_at: new Date().toISOString() };
     })));
     const mapped = listings();
@@ -183,7 +189,7 @@ function createOrderReport({ db, client, connection, variantIdOf, log }) {
   async function packages({ from, to }) {
     const window = reportRange(from, to);
     return section(['packages', window.from, window.to], async api => {
-      const raw = await paged(page => api.packages({ page, size: PAGE_SIZE, from: window.from, to: window.to }));
+      const raw = await paged((page, signal) => api.packages({ page, size: PAGE_SIZE, from: window.from, to: window.to, signal }));
       const items = raw.map(r => ({ id: idOf(r.package_id), number: r.package_number, status: label(r.status),
         created_at: iso(r.created_at), due_at: iso(r.received_at_forecast), received_at: iso(r.effective_received_date || r.received_at),
         warehouse: r.warehouse?.title, delivery: label(r.delivery_type) }));
@@ -194,7 +200,7 @@ function createOrderReport({ db, client, connection, variantIdOf, log }) {
 
   async function packageDetails(id) {
     return section(['package', id], async api => {
-      const raw = await paged((page) => api.packageDetails({ id, page }));
+      const raw = await paged((page, signal) => api.packageDetails({ id, page, signal }));
       const mapped = listings();
       const items = raw.flatMap(({ package_products: p }) => Array.isArray(p) ? p : p ? [p] : []).map(r => ({
         id: idOf(r.package_item_id), title: r.title, variant_id: idOf(r.dkpc), expected: number(r.ordered_count),
