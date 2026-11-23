@@ -84,7 +84,7 @@ export async function render(view, ctx, params = []) {
     const approval = d.attention.filter((j) => j.status === 'needs_approval');
     view.innerHTML = `
       <div class="page-head"><div><h1>قیمت دیجی‌کالا</h1><p>قیمت آگهی‌های دیجی‌کالا با تغییر قیمت سایت شرکت، با فرمول همان آگهی خودکار عوض می‌شود. فرمول هر بسته‌بندی را در «آگهی‌ها» تعیین کنید.</p></div>
-        <div class="page-actions"><a class="btn" href="#/digikala/packaging">بررسی بسته‌بندی (${fa(d.packaging_count || 0)})</a><a class="btn" href="#/digikala/operations">پیگیری دیجی‌کالا</a><a class="btn" href="#/listings?platform=1">${icon('link')}آگهی‌ها</a>${s.connected ? `<a class="btn btn-primary" href="#/digikala/import">${icon('download')}ورود آگهی‌ها از دیجی‌کالا</a>` : ''}</div></div>
+        <div class="page-actions"><a class="btn" href="#/digikala/packaging">بررسی بسته‌بندی (${fa(d.packaging_count || 0)})</a><a class="btn" href="#/digikala/operations">پیگیری دیجی‌کالا</a><a class="btn" href="#/listings?platform=1">${icon('link')}تنوع‌های متصل</a>${s.connected ? `<a class="btn btn-primary" href="#/digikala/import">${icon('link')}تطبیق کالا و تنوع دیجیکالا</a>` : ''}</div></div>
       ${s.mode === 'dry_run' ? `<div class="callout callout-info">${icon('info')}<span>حالت آزمایشی: چیزی به دیجی‌کالا فرستاده نمی‌شود؛ فقط ثبت می‌شود که چه قیمتی فرستاده می‌شد.</span></div>` : ''}
       <div class="dk-grid">
         ${connection(s)}

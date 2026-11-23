@@ -293,6 +293,12 @@ a.metric:hover { box-shadow: var(--shadow); transform: translateY(-2px); }
 .metric span { font-size: 13px; color: var(--muted); }
 .dk-order-filters { align-items: end; }
 .dk-order-filters .field:last-child { flex: 1 1 16rem; }
+.dk-order-filter-panel > summary { cursor: pointer; width: fit-content; }
+.dk-order-filter-panel[open] { padding: 10px; border: 1px solid var(--line-2); border-radius: 12px; }
+.dk-order-filter-panel[open] > summary { margin-block-end: 8px; }
+.dk-order-filter-panel #dk-orders-date > .card { border: 0; box-shadow: none; padding: 4px 0 10px; }
+.dk-order-filter-panel #dk-orders-date h2, .dk-order-filter-panel #dk-orders-date > .card > p { display: none; }
+.dk-order-filter-panel .dk-order-filters { margin-block: 8px; }
 .dk-order-sales { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 18px; }
 .dk-order-sales > p { flex-basis: 100%; }
 .dk-order-sales > strong { font-size: 22px; }

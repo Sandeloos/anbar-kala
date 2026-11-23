@@ -13,6 +13,7 @@
  * the time we noticed. priceAt() answers "what was the site price at time T".
  */
 const { createWooClient, detect, WooError } = require('./woo');
+const { radanProductUrl, readRadanPack } = require('./radan-packs');
 const { searchKey, nowIso, conflict, notFound, badRequest, normaliseSiteUrl, toRial, toLatinDigits } = require('./util');
 
 /* ------------------------------------------------------------ helpers */
@@ -101,6 +102,17 @@ function guessUnits(text) {
   return last && last >= 2 && last <= 100000 ? last : null;
 }
 
+function hasUnitPriceHint(product) {
+  const text = searchKey(decodeEntities(`${product.name || ''} ${product.description || ''}`));
+  return /قیمت(?:\s+(?:درج|ثبت)\s+شده)?\s*(?:(?:برای|به\s*ازای|مربوط به)\s+)?(?:(?:هر(?:\s+یک)?|یک|1)\s+(?:عدد|واحد)|تکی)/u.test(text);
+}
+
+function declaredPackUnits(title) {
+  const match = /(?:بسته|پک)\s*(?:ی\s*)?(\d{1,6})\s*(?:عددی|تایی|عدد|pcs\b)/iu.exec(searchKey(title));
+  const units = Number(match?.[1]);
+  return units > 1 && units <= 100000 ? units : null;
+}
+
 /** When did a change we just noticed happen? See the header comment. */
 function effectiveTime(siteModified, lastChecked, now) {
   if (!siteModified || !lastChecked) return now;
@@ -144,6 +156,32 @@ function createSync({ packaging, db, config, secrets, events, log, fetchImpl, me
     return c;
   }
 
+  // Incremental sync overlaps the previous fetch window. Reuse that recent
+  // evidence for the same URL and reference price, but let explicit reads retry.
+  const recentPacks = new Map();
+  async function checkRadanPacks(comp, items, { force = false } = {}) {
+    await mapLimit(items, 3, async (item) => {
+      const url = item.type === 'simple' && radanProductUrl(comp.site_url, item.permalink);
+      if (!url || !(item.regular_price > 0)) return;
+      if (!force && !guessUnits(item.name)) {
+        const existing = db.get('SELECT units_per_pack, sale_pack_units FROM products WHERE company_id = ? AND woo_id = ?', comp.id, item.woo_id);
+        if (!(existing?.units_per_pack > 1 || existing?.sale_pack_units > 1)) return;
+      }
+      const key = `${url}|${item.regular_price}`;
+      const cached = recentPacks.get(key);
+      if (!force && cached?.expires > Date.now()) {
+        item.pack_evidence = await cached.value;
+        return;
+      }
+      const value = readRadanPack(url, item.regular_price, fetchImpl || fetch);
+      const entry = { value, expires: Date.now() + 10 * 60_000 };
+      if (recentPacks.size >= 2000) recentPacks.delete(recentPacks.keys().next().value);
+      recentPacks.set(key, entry);
+      item.pack_evidence = await value;
+      if (!item.pack_evidence) entry.expires = Date.now() + 60_000;
+    });
+  }
+
   /**
    * Writes normalised items: new products, changed prices/stock (with history)
    * and refreshed names/links. Returns counts and the ids that changed.
@@ -170,18 +208,24 @@ function createSync({ packaging, db, config, secrets, events, log, fetchImpl, me
         const existing = db.get('SELECT * FROM products WHERE company_id = ? AND woo_id = ?', comp.id, it.woo_id);
         if (!existing) {
           const guess = guessUnits(`${it.name} ${it.attributes || ''}`);
+          const evidence = it.pack_evidence;
+          const saleUnits = evidence?.sale_units || (evidence && !evidence.sizes.includes(guess) ? 1 : guess) || 1;
+          const priceUnits = evidence?.price_units || (hasUnitPriceHint(it) ? 1 : guess || 1);
           const info = db.run(`INSERT INTO products (company_id, woo_id, parent_woo_id, type, name, parent_name, attributes, sku, permalink, slug, description,
               site_status, regular_price, sale_price, stock_status, stock_quantity, manage_stock, site_modified_at, search_text,
-              units_per_pack, units_guessed, last_checked_at, last_changed_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              units_per_pack, sale_pack_units, units_guessed, last_checked_at, last_changed_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           comp.id, it.woo_id, it.parent_woo_id, it.type, it.name, it.parent_name, it.attributes, it.sku, it.permalink, it.slug, it.description || '',
           it.site_status, it.regular_price, it.sale_price, it.stock_status, it.stock_quantity, it.manage_stock, it.site_modified_at, search,
-          guess || 1, guess ? 1 : 0, now, now, now, now);
+          priceUnits, saleUnits, guess && !evidence?.sale_units ? 1 : 0, now, now, now, now);
           const id = Number(info.lastInsertRowid);
           db.run(`INSERT INTO price_history (product_id, regular_price, sale_price, stock_status, stock_quantity, price_changed, stock_changed,
                     source, effective_at, observed_at, user_id) VALUES (?, ?, ?, ?, ?, 1, 1, 'import', ?, ?, ?)`,
           id, it.regular_price, it.sale_price, it.stock_status, it.stock_quantity, now, now, userId);
           if (it.category_names) db.run('UPDATE products SET category_names = ? WHERE id = ?', it.category_names, id);
+          if (evidence && !evidence.sizes.includes(saleUnits)) {
+            packaging?.observe({ ...it, id, units_per_pack: priceUnits, sale_pack_units: saleUnits }, it, { at: now, effectiveAt: now });
+          }
           stats.created++;
           stats.ids.push(id);
           continue;
@@ -332,6 +376,7 @@ function createSync({ packaging, db, config, secrets, events, log, fetchImpl, me
           const it = normalise(raw, comp.price_unit);
           if (it) { items.push(it); seen.add(it.woo_id); }
         }
+        await checkRadanPacks(comp, items);
         add(run, apply(comp, items, { source: 'sync', fetchedAt }));
         events.emit('sync', { companyId: comp.id, state: 'progress', kind: 'full', page, pages, total, seen: run.seen });
         page++;
@@ -376,6 +421,7 @@ function createSync({ packaging, db, config, secrets, events, log, fetchImpl, me
           const it = normalise(raw, comp.price_unit);
           if (it) items.push(it);
         }
+        await checkRadanPacks(comp, items);
         add(run, apply(comp, items, { source: 'sync', fetchedAt }));
         page++;
       } while (page <= pages);
@@ -403,7 +449,10 @@ function createSync({ packaging, db, config, secrets, events, log, fetchImpl, me
       } else {
         item = normalise(await client.product(p.woo_id), comp.price_unit);
       }
-      if (item) apply(comp, [item], { source: 'refresh', userId, fetchedAt: now });
+      if (item) {
+        await checkRadanPacks(comp, [item], { force: true });
+        apply(comp, [item], { source: 'refresh', userId, fetchedAt: now });
+      }
     } catch (err) {
       if (err.code === 'not_found') markRemoved(comp, [p.woo_id], now);
       else throw err;
@@ -440,7 +489,9 @@ function createSync({ packaging, db, config, secrets, events, log, fetchImpl, me
     }
     if (!raw) throw notFound('کالایی با این لینک در سایت پیدا نشد.');
     if (raw.type !== 'variable') {
-      apply(comp, [normalise(raw, comp.price_unit)], { source: 'refresh', userId, fetchedAt });
+      const items = [normalise(raw, comp.price_unit)];
+      await checkRadanPacks(comp, items, { force: true });
+      apply(comp, items, { source: 'refresh', userId, fetchedAt });
       const p = db.get('SELECT id FROM products WHERE company_id = ? AND woo_id = ?', comp.id, raw.id);
       return { company: { id: comp.id, name: comp.name }, ids: [p.id], matched: p.id };
     }
@@ -561,4 +612,4 @@ function createSync({ packaging, db, config, secrets, events, log, fetchImpl, me
   };
 }
 
-module.exports = { createSync, backoffMinutes, normalise, effectiveTime, decodeEntities, guessUnits };
+module.exports = { createSync, backoffMinutes, normalise, effectiveTime, decodeEntities, guessUnits, hasUnitPriceHint, declaredPackUnits };

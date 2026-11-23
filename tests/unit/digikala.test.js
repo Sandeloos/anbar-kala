@@ -25,7 +25,7 @@ async function setup(t, { band } = {}) {
   const s = await shop(ctx, { count: 3, seed: 41, variableRatio: 0 });
   const comp = await addCompany(ctx, api, s);
   const p = ctx.db.get("SELECT * FROM products WHERE company_id = ? AND type = 'simple' ORDER BY id LIMIT 1", comp.id);
-  ctx.db.run('UPDATE products SET units_per_pack = 4 WHERE id = ?', p.id);
+  ctx.db.run('UPDATE products SET units_per_pack = 4, units_guessed = 0, configured_at = ? WHERE id = ?', new Date().toISOString(), p.id);
   const product = ctx.db.get('SELECT * FROM products WHERE id = ?', p.id);
   const c = ctx.app.ctx;
   const company = ctx.db.get('SELECT * FROM companies WHERE id = ?', comp.id);
@@ -44,7 +44,7 @@ test('Digikala work list reads official prices and packages without counting int
   await connectAndList(env, { variant: { price_list: 10000, price_sale: 10000 } });
   const from = dayStart(tehranDay(new Date().toISOString()).date);
   const to = new Date(Date.parse(from) + 86_400_000).toISOString();
-  const active = { order_id: 1001, product_variant_id: 501, order_created_at: from, quantity: 2, selling_price: 110000, total_price: 197000 };
+  const active = { order_id: 1001, product_variant_id: 501, product_variant_title: 'کانکتور بستهٔ ۲۵ عددی', order_created_at: from, quantity: 2, selling_price: 110000, total_price: 197000 };
   dk.orders.push(active, active, { ...active, order_id: 1002, total_price: undefined },
     { ...active, order_id: 1003, product_variant_id: 9999 }, { ...active, order_id: 1004, order_created_at: to });
   for (let i = 0; i < 50; i++) dk.orders.push({ ...active, order_id: 2001 + i, order_created_at: to });
@@ -65,6 +65,8 @@ test('Digikala work list reads official prices and packages without counting int
   assert.deepEqual(sections.active.summary, { orders: 3, shipments: 0, rows: 3, missing_prices: 1, total: 197000 });
   assert.equal(sections.active.unmatched, 1);
   assert.equal(sections.active.rows[0].unit_price, 110000);
+  assert.equal(sections.active.rows[0].sale_units, 25);
+  assert.equal(sections.active.rows[0].pack_mismatch, true);
   assert.equal(sections.processed.rows[0].unit_price, 115000);
   assert.equal(sections.processed.summary.shipments, 3);
   assert.equal(sections.processed.summary.total, 520000);
@@ -79,7 +81,34 @@ test('Digikala work list reads official prices and packages without counting int
   assert.equal(detail.status, 200);
   assert.equal(detail.body.items[0].expected, 2);
   assert.equal(detail.body.items[0].delivered, 0);
+  const packageRequests = dk.calls.filter(call => call.path.startsWith('/packages')).length;
+  await api.get('/api/digikala/seller-packages');
+  await api.get('/api/digikala/seller-packages/88');
+  assert.equal(dk.calls.filter(call => call.path.startsWith('/packages')).length, packageRequests);
+  assert.equal(ctx.db.get("SELECT COUNT(*) AS n FROM dk_read_snapshots WHERE kind IN ('packages','package')").n, 2);
+  await api.get('/api/digikala/seller-packages?refresh=1');
+  assert.equal(dk.calls.filter(call => call.path.startsWith('/packages')).length, packageRequests + 1);
   assert.equal(ctx.db.get('SELECT COUNT(*) AS n FROM orders').n, before);
+});
+
+test('WooCommerce unit price and physical sale pack are independent', async t => {
+  const { ctx, c, product } = await setup(t);
+  const company = ctx.db.get('SELECT * FROM companies WHERE id=?', product.company_id);
+  const source = { ...product, woo_id: 80001, name: 'کانکتور مدل SP4 بسته ۲۵ عددی',
+    description: '<p>قیمت به ازای هر عدد است.</p>', regular_price: 10000 };
+  c.sync.apply(company, [source], { source: 'sync' });
+  let local = ctx.db.get('SELECT * FROM products WHERE woo_id=80001');
+  assert.equal(local.units_per_pack, 1);
+  assert.equal(local.sale_pack_units, 25);
+  const variant = { title: source.name, units: 25, margin_pct: 0, round_to: 1 };
+  assert.equal(priceFor(variant, local).base, 250000);
+  assert.equal(priceFor({ ...variant, units: 1 }, local), null);
+  ctx.db.run('UPDATE products SET units_per_pack=25 WHERE id=?', local.id);
+  c.sync.apply(company, [source], { source: 'sync' });
+  local = ctx.db.get('SELECT * FROM products WHERE woo_id=80001');
+  assert.equal(local.units_per_pack, 25, 'legacy basis is not rewritten automatically');
+  assert.equal(local.packaging_pending, 1);
+  assert.equal(priceFor(variant, local), null);
 });
 
 test('Digikala publishes history progress and calculates combined sales only after the last page', async t => {
@@ -306,12 +335,12 @@ test('User-Agent: DigikalaTrustedBot/SelfToken/<seller code from the token> on e
   // A wrong override is refused by Digikala and reported; clearing it goes back to the automatic one
   assert.equal((await api.put('/api/digikala/settings', { user_agent: 'نامعتبر' })).status, 400, 'ASCII only');
   assert.equal((await api.put('/api/digikala/settings', { user_agent: 'SellerApp/2' })).status, 200);
-  const refused = await api.post('/api/digikala/import/preview');
+  const refused = await api.post('/api/digikala/import/preview', { refresh: true });
   assert.equal(refused.status, 400);
   assert.match(refused.body.error, /Invalid User-Agent/);
   assert.equal(dk.calls.at(-1).userAgent, 'SellerApp/2');
   assert.equal((await api.put('/api/digikala/settings', { user_agent: '' })).status, 200);
-  assert.equal((await api.post('/api/digikala/import/preview')).status, 200);
+  assert.equal((await api.post('/api/digikala/import/preview', { refresh: true })).status, 200);
 });
 
 test('import: every variant is read, matched by supplier code or name, and only confirmed ones become listings', async (t) => {
@@ -374,8 +403,11 @@ test('import: every variant is read, matched by supplier code or name, and only 
   // Creating the same one twice does nothing; the next read leaves both out
   const again = await api.post('/api/digikala/import', { preview_id: r.body.preview_id, rows: [{ variant_id: 601, product_id: product.id, units: 25 }] });
   assert.equal(again.body.created, 0);
-  const next = await api.post('/api/digikala/import/preview');
+  const callsBefore = dk.calls.length;
+  const next = await api.post('/api/digikala/import/preview', { cache_only: true });
   assert.equal(next.body.already_linked, 3);
+  assert.equal(next.body.catalog_checked_at, r.body.catalog_checked_at);
+  assert.equal(dk.calls.length, callsBefore, 'reopening the saved catalog does not call Digikala');
 });
 
 

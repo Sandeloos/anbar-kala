@@ -360,6 +360,7 @@ async function renderOne(view, ctx, id) {
   function paint() {
     const p = d.product;
     const cur = p.currency;
+    const saleUnits = p.sale_pack_units || p.units_per_pack;
     const companyWh = warehouses.find((w) => w.id === p.company_warehouse_id);
     const status = p.removed_at ? `<span class="badge badge-red">از سایت حذف شده (${esc(ago(p.removed_at))})</span>`
       : p.site_status && p.site_status !== 'publish' ? `<span class="badge badge-amber">${esc(SITE_STATUS[p.site_status] || p.site_status)}</span>` : '';
@@ -389,7 +390,10 @@ async function renderOne(view, ctx, id) {
                   ${p.price_source === 'manual' ? '<span class="badge badge-orange">قیمت دستی ثبت شده</span>' : ''}
                   <span>آخرین بررسی: ${when(p.last_checked_at, 'ago')}</span></div></div>
               <div style="display:grid;gap:6px;justify-items:end">${stockBadge(p)}
-                ${p.units_per_pack > 1 ? `<span class="small muted">هر عدد: ${moneyText(Math.round(p.regular_price / p.units_per_pack), cur)}</span>` : ''}</div>
+                ${p.packaging_pending
+                  ? '<a class="link small" href="#/digikala/packaging">مبنای قیمت در انتظار بررسی بسته‌بندی</a>'
+                  : p.regular_price != null ? `<span class="small muted">هر عدد: ${moneyText(Math.round(p.regular_price / p.units_per_pack), cur)}</span>
+                    ${saleUnits > 1 ? `<span class="small muted">بستهٔ ${fa(saleUnits)} عددی: ${moneyText(Math.round(p.regular_price * saleUnits / p.units_per_pack), cur)}</span>` : ''}` : ''}</div>
             </div>
             <div class="chart" id="chart"></div>
           </section>

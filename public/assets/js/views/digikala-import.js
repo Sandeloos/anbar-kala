@@ -5,7 +5,7 @@
  * product and the units of each sale, then the chosen listings are created together.
  */
 import { get, post } from '../api.js';
-import { $, $$, esc, icon, fa, moneyText, toast, busy, skeleton, empty } from '../ui.js';
+import { $, $$, esc, icon, fa, moneyText, smartTime, toast, busy, skeleton, empty } from '../ui.js';
 import { createPicker } from '../picker.js';
 
 
@@ -13,31 +13,32 @@ const latin = (s) => String(s ?? '').replace(/[٬,]/g, '').replace(/٫/g, '.').r
 const kindOf = (it) => {
   const top = it.suggestions[0];
   if (!top) return 'none';
-  return top.confident && it.units_guess != null ? 'sure' : 'check';
+  return top.confident && !top.price_basis_issue && it.units_guess != null ? 'sure' : 'check';
 };
 const why = (s) => (s.why === 'sku' ? 'کد یکسان' : `امتیاز نام و توضیحات ${fa(Math.round(s.score * 100))}٪`);
 
-export async function render(view) {
+export async function render(view, ctx) {
   view.innerHTML = skeleton(4);
   const st = (await get('/digikala')).status;
   let data = null;
-  let filter = 'check';
+  let query = ctx.query.get('q') || '';
+  let filter = query ? 'all' : 'check';
   let page = 0;
-  let query = '';
   let mode = 'match';
   let sitePage = 0;
   let saving = false;
+  let readRequest = 0;
   const drafts = new Map();
   const extra = new Map(); // variant id → products picked by search (added to its options)
 
   view.innerHTML = `
-    <div class="page-head"><div><h1>مدیریت کاتالوگ دیجی‌کالا</h1>
-      <p>۱. سایت‌ها را به‌روز کنید · ۲. کالاها را مقایسه کنید · ۳. تطبیق‌ها را تأیید کنید</p></div>
+    <div class="page-head"><div><h1>تطبیق کالا و تنوع دیجیکالا</h1>
+      <p>DKP کد کالا در دیجیکالاست. DKPC کد تنوع فروش است و به کالای شرکت وصل می‌شود.</p></div>
       <div class="page-actions"><a class="btn" href="#/digikala">${icon('back')}قیمت دیجی‌کالا</a></div></div>
     ${st.connected ? `<section class="card" aria-labelledby="h-di-read">
-      <div class="card-head"><h2 id="h-di-read">خواندن از دیجی‌کالا</h2></div>
-      <p class="small muted">تنوع‌هایی که آگهی دارند دوباره نمی‌آیند. هر وقت کالای تازه‌ای در دیجی‌کالا گذاشتید، دوباره بخوانید. در دیجی‌کالا چیزی عوض نمی‌شود.</p>
-      <div class="form-actions"><button class="btn btn-primary" type="button" id="di-read">${icon('download')}خواندن تنوع‌ها از دیجی‌کالا</button></div>
+      <div class="card-head"><h2 id="h-di-read">کاتالوگ فروشنده</h2></div>
+      <p class="small muted" id="di-snapshot">اگر نسخهٔ ذخیره‌شده وجود داشته باشد، همین‌جا باز می‌شود.</p>
+      <div class="form-actions"><button class="btn btn-primary" type="button" id="di-read">${icon('download')}همگام‌سازی تنوع‌ها با دیجیکالا</button></div>
     </section>
     <div id="di-result"></div>`
     : `<div class="callout callout-info">${icon('info')}<span>اول مدیر باید از صفحه‌ی «قیمت دیجی‌کالا» به پنل فروشندگی وصل شود.</span><a class="btn btn-sm" href="#/digikala">قیمت دیجی‌کالا</a></div>`}`;
@@ -59,7 +60,7 @@ export async function render(view) {
       <input type="checkbox" class="di-check" data-pick aria-label="انتخاب ${esc(it.title)}"${sure ? ' checked' : ''}>
       <span class="grow">
         <span class="title">${it.product_url ? `<a class="link" href="${esc(it.product_url)}" target="_blank" rel="noopener">${esc(it.title)}</a>` : esc(it.title)}</span>
-        <span class="sub"><span class="ltr">DKPC ${esc(it.variant_id)}</span>${it.supplier_code ? `<span>کد تأمین‌کننده <span class="ltr">${esc(it.supplier_code)}</span></span>` : ''}
+        <span class="sub"><span class="ltr">DKPC ${esc(it.variant_id)}</span>${it.product_id ? `<span class="ltr">DKP ${esc(it.product_id)}</span>` : ''}${it.supplier_code ? `<span>کد تأمین‌کننده <span class="ltr">${esc(it.supplier_code)}</span></span>` : ''}
           <span>قیمت فعلی ${moneyText(it.price_sale, 'toman')}</span>${it.extra ? `<span>${esc(it.extra)}</span>` : ''}${it.active ? '' : '<span class="badge">غیرفعال در دیجی‌کالا</span>'}</span>
         <span class="di-fields">
           <span class="field"><label for="di-p-${it.variant_id}">کالای سایت</label><select id="di-p-${it.variant_id}" data-product>${options(it)}</select></span>
@@ -97,20 +98,22 @@ export async function render(view) {
     const factor = Number(latin($('[data-multiplier]', r).value));
     const units = Number(latin($('[data-units]', r).value));
     const base = p?.regular_price != null && units > 0 ? Math.round(p.regular_price * units / p.units_per_pack) : null;
-    $('[data-price]', r).textContent = base !== null && factor >= 0.5 && factor <= 11 ? `قیمت ${fa(units)} عدد: ${moneyText(base, p.currency)} × ${fa(factor)} = ${moneyText(Math.ceil(Math.round(base * factor)), p.currency)} — افزایش روی قیمت پایه ${fa(Math.round((factor - 1) * 10000) / 100)}٪` : 'کالا، تعداد فروش و ضریب معتبر بین ۰٫۵ و ۱۱ را وارد کنید.';
+    $('[data-price]', r).textContent = p?.price_basis_issue || (base !== null && factor >= 0.5 && factor <= 11 ? `قیمت ${fa(units)} عدد: ${moneyText(base, p.currency)} × ${fa(factor)} = ${moneyText(Math.ceil(Math.round(base * factor)), p.currency)} — افزایش روی قیمت پایه ${fa(Math.round((factor - 1) * 10000) / 100)}٪` : 'کالا، تعداد فروش و ضریب معتبر بین ۰٫۵ و ۱۱ را وارد کنید.');
     $('[data-hint]', r).textContent = p ? `قیمت سایت برای ${fa(p.units_per_pack)} عدد؛ بستهٔ فروش ${fa(p.sale_pack_units || p.units_per_pack)} عدد؛ ضریب پیش‌فرض ${fa(p.default_multiplier || 1.5)}.${it.units_guess == null && p.units_estimate ? ` تعداد ${fa(p.units_estimate.units)} از نزدیکی یا نسبت قیمت‌ها تخمین زده شده؛ تعداد را بررسی و تأیید کنید.` : ''}` : '';
   }
 
   function paint() {
     const box = $('#di-result', view);
+    const stamp = $('#di-snapshot', view);
+    if (stamp && data.catalog_checked_at) stamp.textContent = `آخرین همگام‌سازی کاتالوگ ${smartTime(data.catalog_checked_at)}`;
     if (!data.items.length && !data.opportunities?.length) {
-      box.innerHTML = `<div class="card">${empty('check', 'تنوع تازه‌ای نیست', `${fa(data.total)} تنوع در دیجی‌کالا خوانده شد و همه آگهی دارند.`)}</div>`;
+      box.innerHTML = `<div class="card">${empty('check', 'تنوعِ بدون اتصال پیدا نشد', `${fa(data.total)} تنوع در نسخهٔ کاتالوگ موجود است.`)}</div>`;
       return;
     }
     const n = (k) => data.items.filter((x) => k === 'all' || kindOf(x) === k).length;
     box.innerHTML = `
-      <div class="callout callout-ok">${icon('check')}<span>${fa(data.total)} تنوع خوانده شد؛ ${fa(data.already_linked)} تا آگهی دارند و ${fa(data.items.length)} تا تازه است. فقط تطبیق‌های دارای شناسهٔ معتبر و بدون ابهام انتخاب شده‌اند.</span></div>
-      <div class="form-actions"><button class="btn ${mode === 'match' ? 'btn-primary' : ''}" data-mode="match">تطبیق آگهی‌ها</button><button class="btn ${mode === 'site' ? 'btn-primary' : ''}" data-mode="site">کالاهای سایت (${fa(data.opportunities?.length || 0)})</button><button class="btn" id="di-sync">به‌روزرسانی از سایت‌ها</button></div>
+      <div class="callout callout-ok">${icon('check')}<span>${fa(data.total)} تنوع در کاتالوگ؛ ${fa(data.already_linked)} متصل و ${fa(data.items.length)} بدون اتصال.</span></div>
+      <div class="form-actions"><button class="btn ${mode === 'match' ? 'btn-primary' : ''}" data-mode="match">تطبیق تنوع‌ها</button><button class="btn ${mode === 'site' ? 'btn-primary' : ''}" data-mode="site">کالاهای سایت (${fa(data.opportunities?.length || 0)})</button><button class="btn" id="di-sync">به‌روزرسانی سایت‌ها</button><button class="btn" id="di-rematch">مقایسه با آخرین دادهٔ سایت</button></div>
       <div class="small muted">${(data.companies || []).map((c) => `${esc(c.name)}: ${c.last_full_sync_at ? esc(new Date(c.last_full_sync_at).toLocaleString('fa-IR')) : 'هنوز همگام نشده'}${c.sync_error ? ' — خطا در همگام‌سازی' : ''}`).join(' · ')}</div>
       ${data.description_pending ? `<p class="small muted">توضیحات ${fa(data.description_pending)} کالا هنوز خوانده نشده؛ با خواندن دوباره، بررسی ادامه پیدا می‌کند.</p>` : ''}
       ${data.complete === false ? '<p class="callout callout-warn">خواندن کاتالوگ کامل نشده؛ پیشنهاد کالای جدید تا خواندن کامل نمایش داده نمی‌شود.</p>' : ''}
@@ -122,7 +125,7 @@ export async function render(view) {
       </div>
       <section class="card" aria-label="تنوع‌های دیجی‌کالا"><div class="list">${data.items.map(row).join('')}</div><p id="di-no-matches" class="small muted" hidden>در این فیلتر موردی نیست؛ فیلتر دیگری انتخاب کنید.</p></section><div class="form-actions"><button class="btn" id="di-prev">قبلی</button><span id="di-page"></span><button class="btn" id="di-next">بعدی</button></div>
       <div class="card"><div class="field"><label for="di-bulk-multiplier">ضریب گروهی برای همهٔ انتخاب‌شده‌ها (حتی صفحات دیگر)</label><input id="di-bulk-multiplier" inputmode="decimal" value="۱٫۵"></div><button class="btn" type="button" id="di-bulk-apply">اعمال ضریب به انتخاب‌شده‌ها</button><p class="small muted">قبل از تأیید اتصال، قیمت هر ردیف را بررسی کنید. ضریب گروهی جای ضریب قبلی انتخاب‌شده‌ها می‌نشیند.</p></div>
-      <div class="di-bar"><span id="di-count"></span><button class="btn btn-primary" type="button" id="di-save">${icon('check')}تأیید اتصال آگهی‌ها</button></div></div>`;
+      <div class="di-bar"><span id="di-count"></span><button class="btn btn-primary" type="button" id="di-save">${icon('check')}تأیید اتصال تنوع‌ها</button></div></div>`;
     $$('.di-row', box).forEach((r) => {
       const draft = drafts.get(r.dataset.v);
       if (draft) {
@@ -200,19 +203,26 @@ export async function render(view) {
     input.focus();
   }
 
-  async function read(btn) {
-    busy(btn, true, 'در حال خواندن کالاها و توضیحات…');
+  async function read(btn, refresh = false) {
+    const request = ++readRequest;
+    if (btn) busy(btn, true, refresh ? 'در حال همگام‌سازی…' : 'در حال مقایسه…');
     try {
-      data = await post('/digikala/import/preview');
+      const next = await post('/digikala/import/preview', refresh ? { refresh: true } : { cache_only: true });
+      if (request !== readRequest) return;
+      if (next.snapshot_available === false) {
+        $('#di-snapshot', view).textContent = 'کاتالوگ هنوز ذخیره نشده است. برای اولین بار همگام‌سازی را بزنید.';
+        return;
+      }
+      data = next;
       extra.clear();
       drafts.clear();
-      filter = 'check';
+      filter = query ? 'all' : 'check';
       page = 0;
       paint();
     } catch (err) {
-      toast(err.message, { error: true });
+      if (request === readRequest) toast(err.message, { error: true });
     } finally {
-      busy(btn, false);
+      if (btn) busy(btn, false);
     }
   }
 
@@ -245,8 +255,8 @@ export async function render(view) {
       const connected = new Set(rows.filter((r) => !skipped.has(r.variant_id)).map((r) => r.product_id));
       data.opportunities = (data.opportunities || []).filter((p) => !connected.has(p.id));
       paint();
-      toast(`${fa(res.created)} آگهی ساخته شد.${res.skipped.length ? ` ${fa(res.skipped.length)} مورد ساخته نشد: ${res.skipped.map((s) => s.reason).join('، ')}.` : ''} ${rows.some((r) => r.multiplier !== undefined) ? 'فرمول ثبت شد؛ وضعیت ارسال را در «قیمت دیجی‌کالا» ببینید.' : 'برای قیمت‌گذاری خودکار، فرمول را در «آگهی‌ها» روشن کنید.'}`,
-        { action: rows.some((r) => r.multiplier !== undefined) ? 'وضعیت ارسال' : 'آگهی‌ها', onAction: () => { location.hash = rows.some((r) => r.multiplier !== undefined) ? '#/digikala' : '#/listings?platform=1'; } });
+      toast(`${fa(res.created)} تنوع متصل شد.${res.skipped.length ? ` ${fa(res.skipped.length)} مورد متصل نشد: ${res.skipped.map((s) => s.reason).join('، ')}.` : ''} ${rows.some((r) => r.multiplier !== undefined) ? 'وضعیت قیمت‌گذاری را در «قیمت دیجیکالا» ببینید.' : ''}`,
+        { action: rows.some((r) => r.multiplier !== undefined) ? 'وضعیت قیمت‌گذاری' : 'تنوع‌های متصل', onAction: () => { location.hash = rows.some((r) => r.multiplier !== undefined) ? '#/digikala' : '#/listings?platform=1'; } });
     } catch (err) {
       toast(err.message, { error: true });
       busy(btn, false);
@@ -288,7 +298,8 @@ export async function render(view) {
         toast(failed.length ? failed.map((r) => r.reason.message).join('، ') : 'خواندن محصولات سایت‌ها شروع شد. پس از پایان همگام‌سازی، دوباره مقایسه را اجرا کنید.', { error: !!failed.length });
       }).finally(() => busy(b, false));
     } else if (b.id === 'di-prev' || b.id === 'di-next') { page += b.id === 'di-next' ? 1 : -1; paginate(); }
-    else if (b.id === 'di-read') read(b);
+    else if (b.id === 'di-read') read(b, true);
+    else if (b.id === 'di-rematch') read(b);
     else if (b.id === 'di-save') save(b);
     else if (b.dataset.f) {
       filter = b.dataset.f;
@@ -314,4 +325,5 @@ export async function render(view) {
     }
     count();
   };
+  if (st.connected) await read();
 }

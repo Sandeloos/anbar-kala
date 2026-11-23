@@ -11,7 +11,7 @@ async function signIn(page) {
 const laptopOnly = (testInfo) => test.skip(testInfo.project.name !== 'laptop', 'changes shared data; runs once');
 const faDigits = (s) => String(s).replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d]);
 
-test('today opens on Digikala and Radan with official amounts and package details', async ({ page }) => {
+test('today opens on Digikala with all companies, compact filters and package details', async ({ page }) => {
   const requests = [];
   const now = new Date().toISOString();
   let releaseSales;
@@ -26,7 +26,7 @@ test('today opens on Digikala and Radan with official amounts and package detail
     return route.fulfill({ json: { sales: { orders: 1, total: 197000, overlaps: 0, omitted: 1 }, sections: { active: {
       fetched_at: now, unmatched: 1, invalid: 0, excluded_unmatched: 1,
       summary: { orders: 1, shipments: 0, rows: 1, missing_prices: 0, total: 197000 },
-      rows: [{ order_id: '1001', variant_id: '501', qty: 2, title: 'کالای رادن', ordered_at: now,
+      rows: [{ order_id: '1001', variant_id: '501', qty: 2, sale_units: 25, title: 'کالای رادن', ordered_at: now,
         unit_price: 110000, total_price: 197000, company_name: 'رادن' }]
     } } } });
   });
@@ -39,8 +39,13 @@ test('today opens on Digikala and Radan with official amounts and package detail
 
   await signIn(page);
   await page.locator('.metric[href="#/orders?period=today"]').click();
+  await expect(page.locator('#dk-orders-scope')).toContainText('همهٔ شرکت‌ها');
+  await expect(page.getByLabel('شرکت', { exact: true })).toBeHidden();
+  await expect(page.getByRole('heading', { level: 2 }).first()).toHaveText('محموله‌های فروشنده');
+  await page.getByText('فیلترها و بازهٔ تاریخ', { exact: true }).click();
   await expect(page.getByLabel('پلتفرم', { exact: true })).toHaveValue('1');
-  await expect(page.getByLabel('شرکت', { exact: true })).toHaveValue('10');
+  await expect(page.getByLabel('شرکت', { exact: true })).toHaveValue('all');
+  await page.getByText('فیلترها و بازهٔ تاریخ', { exact: true }).click();
   await expect(page.locator('#dk-orders-result tbody tr')).toContainText('۱۱٬۰۰۰ تومان');
   releaseSales();
   await expect(page.locator('#dk-orders-sales')).toContainText('۱۹٬۷۰۰ تومان');
@@ -48,8 +53,10 @@ test('today opens on Digikala and Radan with official amounts and package detail
   await expect(page.locator('#dk-orders-result .metric').last()).toContainText('۱۹٬۷۰۰ تومان');
   await expect(page.locator('#dk-orders-result tbody tr')).toContainText('۱۱٬۰۰۰ تومان');
   await expect(page.locator('#dk-orders-result tbody tr')).toContainText('۱۹٬۷۰۰ تومان');
-  await expect(page.locator('#dk-orders-result')).toContainText('هنوز به کالای شرکت وصل نیست');
-  expect(requests[0].searchParams.get('company')).toBe('10');
+  await expect(page.locator('#dk-orders-result tbody tr')).toContainText('۲۵ عدد در هر فروش');
+  await expect(page.locator('#dk-orders-result')).toContainText('قلم تطبیق‌نشده');
+  await expect(page.locator('#dk-orders-result')).toContainText('تأمین‌کنندهٔ این اقلام هنوز در انبار مشخص نیست');
+  expect(requests[0].searchParams.has('company')).toBe(false);
   const { searchParams } = requests[0];
   expect(searchParams.get('from')).toContain('20:30:00.000Z');
   expect(Date.parse(searchParams.get('to')) - Date.parse(searchParams.get('from'))).toBe(86_400_000);

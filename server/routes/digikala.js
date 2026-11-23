@@ -15,7 +15,9 @@ module.exports = async function digikalaRoutes(app) {
     company: z.coerce.number().int().positive().optional(), q: optText(180).optional(),
     section: z.enum(['active', 'processed', 'returned', 'canceled', 'sales']).optional()
   }).parse(req.query)));
-  app.get('/digikala/seller-packages', async (req) => digikala.orderReport.packages(reportDates.parse(req.query)));
+  app.get('/digikala/seller-packages', async (req) => digikala.orderReport.packages(reportDates.extend({
+    refresh: z.enum(['1']).optional()
+  }).parse(req.query)));
   app.get('/digikala/seller-packages/:id', async (req) => {
     const id = intIn('شناسهٔ محموله', 1, Number.MAX_SAFE_INTEGER).parse(req.params.id);
     return digikala.orderReport.packageDetails(id);
@@ -63,7 +65,9 @@ module.exports = async function digikalaRoutes(app) {
   });
 
   /* Import: read every seller variant with suggested site products, then create the confirmed listings */
-  app.post('/digikala/import/preview', async () => digikala.importPreview());
+  app.post('/digikala/import/preview', async (req) => digikala.importPreview(z.object({
+    refresh: z.boolean().optional(), cache_only: z.boolean().optional()
+  }).parse(req.body ?? {})));
 
   app.post('/digikala/import', async (req) => {
     const b = z.object({

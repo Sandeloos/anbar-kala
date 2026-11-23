@@ -26,19 +26,28 @@ const crypto = require('crypto');
 const { nowIso, badRequest, notFound, conflict, searchKey } = require('./util');
 const { createDigikalaClient, decryptChallenge, checkPrivateKey, DigikalaError, DEFAULT_USER_AGENT, trustedUserAgent, sellerIdOf } = require('./digikala-api');
 const { defaultMultiplier, pricingGroup, priceUnitsSuggestion } = require('./pricing-defaults');
-const { guessUnits } = require('./sync');
+const { guessUnits, hasUnitPriceHint, declaredPackUnits } = require('./sync');
 const { createReferenceRequests } = require('./digikala-reference');
 const { createBuybox } = require('./digikala-buybox');
 const { createDigikalaOrders } = require('./digikala-orders');
 const { createOrderReport } = require('./digikala-order-report');
+const { createDigikalaSnapshots } = require('./digikala-snapshots');
 const { plain, readProductDescription } = require('./product-content');
 
 const MODES = { off: 'خاموش', dry_run: 'آزمایشی (چیزی فرستاده نمی‌شود)', live: 'فعال' };
 const SELF_TOKEN_DAYS = 360; // what the seller panel shows for a new self-token
 
 /** Digikala price of a listing by its formula, in rials (null when it cannot be computed). */
+function pricingIssue(listing, product) {
+  if (product.packaging_pending || (product.units_per_pack > 1 && (hasUnitPriceHint(product) || (product.units_guessed && !product.configured_at)))) {
+    return 'مبنای قیمت سایت نیاز به بررسی دارد.';
+  }
+  const declared = declaredPackUnits(listing.title);
+  return declared && declared !== listing.units ? 'تعداد ثبت‌شده در هر فروش با بستهٔ اعلام‌شده در تنوع دیجیکالا فرق دارد.' : null;
+}
+
 function priceFor(listing, product) {
-  if (!listing || !product || product.packaging_pending || product.regular_price === null || product.regular_price === undefined) return null;
+  if (!listing || !product || pricingIssue(listing, product) || product.regular_price === null || product.regular_price === undefined) return null;
   if (!listing.margin_default && (listing.margin_pct === null || listing.margin_pct === undefined)) return null;
   const base = Math.round((product.regular_price * listing.units) / product.units_per_pack);
   const raw = base * (1 + (listing.margin_default ? defaultMultiplier(product) - 1 : Number(listing.margin_pct) / 100)) + (listing.fixed_add || 0);
@@ -56,6 +65,11 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
   const conn = () => db.get('SELECT * FROM dk_connection WHERE id = 1');
   const platformId = () => (db.get("SELECT id FROM platforms WHERE code = 'digikala'") || {}).id;
   const dec = (v) => (v ? secrets.decrypt(v) : null);
+  const snapshots = createDigikalaSnapshots(db, () => {
+    const c = conn();
+    const id = c.access_token_enc && sellerIdOf(dec(c.access_token_enc));
+    return JSON.stringify([c.base_url.replace(/\/+$/, ''), id || [c.client_code, c.connected_at]]);
+  });
 
   const tokens = {
     get() {
@@ -79,9 +93,9 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
   };
 
   const reference = createReferenceRequests({ db, client, connection: conn, audit, events });
-  const buybox = createBuybox({ db, client, connection: conn, audit, events, priceFor, variantIdOf, onRefused: buyboxRefused });
+  const buybox = createBuybox({ db, client, connection: conn, audit, events, priceFor, pricingIssue, variantIdOf, onRefused: buyboxRefused });
   const orderSync = createDigikalaOrders({ db, client, connection: conn, orders, audit, events });
-  const orderReport = createOrderReport({ db, client, connection: conn, variantIdOf, log });
+  const orderReport = createOrderReport({ db, client, connection: conn, variantIdOf, snapshots, guessUnits, log });
 
   /* ------------------------------------------------------------ connection (manager) */
   function status() {
@@ -160,7 +174,7 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
   }
 
   /* ------------------------------------------------------------ the queue */
-  const listingRow = (id) => db.get(`SELECT l.*, p.regular_price, p.units_per_pack, p.sale_pack_units, p.packaging_pending, p.category_names, p.pricing_group, p.name AS product_name, p.name, pl.code AS platform_code
+  const listingRow = (id) => db.get(`SELECT l.*, p.regular_price, p.units_per_pack, p.units_guessed, p.configured_at, p.sale_pack_units, p.packaging_pending, p.category_names, p.pricing_group, p.name AS product_name, p.name, p.description, pl.code AS platform_code
                                      FROM listings l JOIN products p ON p.id = l.product_id JOIN platforms pl ON pl.id = l.platform_id WHERE l.id = ?`, Number(id));
 
   /** Queues (or refreshes) the open job of a listing. Inside the caller's transaction. */
@@ -250,7 +264,7 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
     const vid = variantIdOf(l.code);
     if (!vid) return finish(job, { status: 'failed', error: 'کد تنوع دیجی‌کالا (DKPC) برای این آگهی ثبت نشده.' }, null);
     const f = priceFor(l, l);
-    if (!f) return finish(job, { status: 'failed', error: 'قیمت سایت یا حاشیه‌ی سود این آگهی معلوم نیست.' });
+    if (!f) return finish(job, { status: 'failed', error: pricingIssue(l, l) || 'قیمت سایت یا حاشیهٔ سود این تنوع معلوم نیست.' });
     f.price = buybox.effectivePrice(l.id, f.price);
     const api = client();
     let v;
@@ -260,7 +274,7 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
       return failOrRetry(job, err);
     }
     const latest = listingRow(l.id);
-    if (latest.packaging_pending || latest.units_per_pack !== l.units_per_pack || latest.units !== l.units || latest.product_id !== l.product_id) return finish(job, { status: 'skipped', error: 'بسته‌بندی یا تطبیق کالا در حال بررسی است.' });
+    if (pricingIssue(latest, latest) || latest.units_per_pack !== l.units_per_pack || latest.units !== l.units || latest.product_id !== l.product_id) return finish(job, { status: 'skipped', error: 'بسته‌بندی یا تطبیق کالا در حال بررسی است.' });
     const current = v.price_sale ?? null;
     const change = current ? Math.abs(f.price - current) / current : null;
     const base = { site_price: f.base, target_price: f.price, current_price: current, reference_price: v.price_list ?? null, change_pct: change === null ? null : Math.round(change * 1000) / 10 };
@@ -447,27 +461,52 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
   /* ------------------------------------------------------------ import of listings */
   const previews = new Map(); // id → { at, variants: Map(variant id → variant) }
   const PREVIEW_TTL = 60 * 60e3;
+  const catalogReads = new Map();
 
-  /** Reads every seller variant (network, outside any transaction) and suggests a site product for each. */
-  async function importPreview({ maxPages = 200, size = 50 } = {}) {
-    const c = conn();
-    if (!c.access_token_enc) throw badRequest('اول از صفحه‌ی «قیمت دیجی‌کالا» به دیجی‌کالا وصل شوید.');
+  async function readCatalog(scope, maxPages, size) {
     const api = client();
     const all = [];
     let pages = 1;
     try {
       for (let page = 1; page <= Math.min(pages, maxPages); page++) {
         const d = await api.variants({ page, size });
-        const items = (d && d.items) || [];
+        if (!Array.isArray(d?.items)) throw new Error('ساختار فهرست تنوع‌ها معتبر نیست.');
+        const items = d.items;
         all.push(...items);
         pages = Number(d && d.pager && d.pager.total_pages) || (items.length < size ? page : page + 1);
-        if (!items.length) break;
+        if (!items.length && page < pages) throw new Error('فهرست تنوع‌ها ناقص برگشت.');
       }
     } catch (err) {
       db.tx(() => db.run('UPDATE dk_connection SET last_error = ?, updated_at = ? WHERE id = 1', err.message, nowIso()));
       throw badRequest(`خواندن تنوع‌ها از دیجی‌کالا نشد: ${err.message}`);
     }
     db.tx(() => db.run('UPDATE dk_connection SET last_ok_at = ?, last_error = NULL WHERE id = 1', nowIso()));
+    const complete = pages <= maxPages;
+    const data = { all: all.map(v => ({
+      id: v.id, product_variant_id: v.product_variant_id, product_id: v.product_id, product_title: v.product_title,
+      title: v.title, sku_config: v.sku_config, description: plain(v.description || v.product_description || v.product?.description),
+      supplier_code: v.supplier_code, price_sale: v.price_sale, price_list: v.price_list, active: v.active,
+      marketplace_seller_stock: v.marketplace_seller_stock, image_src: v.image_src, product_url: v.product_url
+    })), complete };
+    return complete ? snapshots.put(scope, 'catalog', '', data) : { data, checked_at: nowIso() };
+  }
+
+  /** Build matching suggestions against the latest local supplier data and the saved seller catalog. */
+  async function importPreview({ maxPages = 200, size = 50, refresh = false, cache_only: cacheOnly = false } = {}) {
+    const c = conn();
+    if (!c.access_token_enc) throw badRequest('اول از صفحه‌ی «قیمت دیجی‌کالا» به دیجی‌کالا وصل شوید.');
+    const scope = snapshots.account();
+    const cached = !refresh && snapshots.get(scope, 'catalog', '');
+    if (!cached && cacheOnly) return { snapshot_available: false };
+    let snapshot = cached;
+    if (!snapshot) {
+      if (!catalogReads.has(scope)) catalogReads.set(scope, readCatalog(scope, maxPages, size).finally(() => catalogReads.delete(scope)));
+      snapshot = await catalogReads.get(scope);
+    }
+    if (scope !== snapshots.account()) throw conflict('حساب فروشندگی عوض شده است؛ صفحه را دوباره باز کنید.');
+    const all = snapshot.data.all.map(v => ({ ...v }));
+    const { complete } = snapshot.data;
+    const readDescriptions = !cached && !cacheOnly;
 
     // Product copy is shared between variants; cache successful reads for a day and failures for 15 minutes.
     const unique = [...new Set(all.filter((v) => !v.description && !v.product_description).map((v) => Number(v.product_id)).filter(Boolean))];
@@ -479,8 +518,12 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
         const productId = unique[cursor++];
         let cached = db.get('SELECT * FROM dk_product_content WHERE product_id = ?', productId);
         const ttl = cached?.description ? 864e5 : 15 * 60e3;
+      if (!readDescriptions && !cached) continue;
         if (!cached || Date.now() - Date.parse(cached.checked_at) > ttl) {
-          if (Date.now() >= contentDeadline) continue;
+          if (!readDescriptions || Date.now() >= contentDeadline) {
+            if (cached?.description) content.set(productId, cached.description);
+            continue;
+          }
           const description = c.base_url.replace(/\/+$/, '') === 'https://seller.digikala.com'
             ? await readProductDescription(productId, fetchImpl).catch(() => '') : '';
           cached = { description };
@@ -501,7 +544,7 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
       const k = codeKey(v.supplier_code || '');
       if (k && (k === seller || counts.get(k) > 5)) v.supplier_code = null;
     }
-    const products = db.all(`SELECT p.id, p.name, p.description, p.permalink, p.sku, p.site_status, p.units_per_pack, p.sale_pack_units, p.packaging_pending, p.category_names, p.pricing_group, p.regular_price, p.company_id, c.name AS company_name, c.currency
+    const products = db.all(`SELECT p.id, p.name, p.description, p.permalink, p.sku, p.site_status, p.units_per_pack, p.units_guessed, p.configured_at, p.sale_pack_units, p.packaging_pending, p.category_names, p.pricing_group, p.regular_price, p.company_id, c.name AS company_name, c.currency
                                         FROM products p JOIN companies c ON c.id = p.company_id WHERE p.removed_at IS NULL AND c.active = 1`);
     const match = createMatcher(products);
     const items = fresh.map((v) => ({ ...v, suggestions: match(v).map((p) => ({ ...p, units_estimate: v.units_guess == null ? priceUnitsSuggestion(v, p) : null })) }));
@@ -509,7 +552,7 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
 
     for (const [k, p] of previews) if (Date.now() - p.at > PREVIEW_TTL) previews.delete(k);
     const id = crypto.randomBytes(12).toString('base64url');
-    previews.set(id, { at: Date.now(), variants: new Map(fresh.map((v) => [v.variant_id, v])) });
+    previews.set(id, { at: Date.now(), scope, variants: new Map(fresh.map((v) => [v.variant_id, v])) });
     const represented = new Set(db.all('SELECT product_id FROM listings WHERE platform_id = ?', platformId()).map((l) => l.product_id));
     const possible = new Set();
     for (const v of all.map(variantView)) {
@@ -517,18 +560,18 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
       if (k && (k === seller || counts.get(k) > 5)) v.supplier_code = null;
       for (const suggestion of match(v)) possible.add(suggestion.product_id);
     }
-    const complete = pages <= maxPages;
     const opportunities = complete ? products.filter((p) => p.site_status === 'publish' && !represented.has(p.id)).map((p) => ({
       ...p, presence: possible.has(p.id) ? 'uncertain' : 'not_found'
     })) : [];
-    return { preview_id: id, total: all.length, already_linked: all.length - fresh.length, items, opportunities, complete, description_pending: unique.filter((id) => !content.has(id)).length,
+    return { preview_id: id, snapshot_available: true, catalog_checked_at: snapshot.checked_at,
+      total: all.length, already_linked: all.length - fresh.length, items, opportunities, complete, description_pending: unique.filter((id) => !content.has(id)).length,
       companies: db.all('SELECT id, name, last_full_sync_at, sync_state, sync_error FROM companies WHERE active = 1') };
   }
 
   /** Creates the confirmed listings together: [{ variant_id, product_id, units }]. */
   function importCreate(actor, previewId, rows) {
     const p = previews.get(previewId);
-    if (!p || Date.now() - p.at > PREVIEW_TTL) throw conflict('فهرست خوانده‌شده کهنه است؛ دوباره «خواندن از دیجی‌کالا» را بزنید.');
+    if (!p || p.scope !== snapshots.account() || Date.now() - p.at > PREVIEW_TTL) throw conflict('فهرست تطبیق کهنه است؛ صفحه را دوباره باز کنید.');
     const pid = platformId();
     const created = [];
     const skipped = [];
@@ -538,6 +581,11 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
         if (!v) { skipped.push({ variant_id: r.variant_id, reason: 'در فهرست خوانده‌شده نیست' }); continue; }
         const product = db.get('SELECT * FROM products WHERE id = ? AND removed_at IS NULL', Number(r.product_id));
         if (!product) { skipped.push({ variant_id: v.variant_id, reason: 'کالای سایت پیدا نشد' }); continue; }
+        const declared = declaredPackUnits(v.title);
+        if (declared && declared !== r.units) {
+          skipped.push({ variant_id: v.variant_id, reason: `تعداد هر فروش باید با بستهٔ ${declared} عددی تنوع یکسان باشد` });
+          continue;
+        }
         const code = String(v.variant_id);
         if (db.get('SELECT 1 FROM listings WHERE platform_id = ? AND code = ?', pid, code)) { skipped.push({ variant_id: v.variant_id, reason: 'آگهی دارد' }); continue; }
         const now = nowIso();
@@ -622,7 +670,8 @@ function createMatcher(products) {
   }
   const view = (p, score, why) => ({
     product_id: p.id, name: p.name, sku: p.sku, company_id: p.company_id, company_name: p.company_name, currency: p.currency,
-    units_per_pack: p.units_per_pack, sale_pack_units: p.sale_pack_units, packaging_pending: p.packaging_pending, default_multiplier: defaultMultiplier(p), pricing_group: pricingGroup(p), regular_price: p.regular_price, permalink: p.permalink, description: plain(p.description), score: Math.round(score * 100) / 100, why, confident: false
+    units_per_pack: p.units_per_pack, sale_pack_units: p.sale_pack_units, packaging_pending: p.packaging_pending,
+    price_basis_issue: pricingIssue({}, p), default_multiplier: defaultMultiplier(p), pricing_group: pricingGroup(p), regular_price: p.regular_price, permalink: p.permalink, description: plain(p.description), score: Math.round(score * 100) / 100, why, confident: false
   });
   return (v) => {
     const out = new Map();

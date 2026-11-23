@@ -31,6 +31,23 @@ test('suggested platform price keeps the margin, rounded to 100 tomans', () => {
   assert.equal(suggest(null, 1, 2), null);
 });
 
+test('a legacy package-to-unit price change cannot suggest a one-piece price for 200 pieces', async (t) => {
+  const { ctx, api, p1, dk } = await setup(t);
+  ctx.db.run("UPDATE listings SET units=200,title='شماره سیم KM1 بسته ۲۰۰ عددی',platform_price=2633500 WHERE id=?", dk.id);
+  ctx.db.run('UPDATE products SET units_per_pack=1,sale_pack_units=1,regular_price=9350 WHERE id=?', p1.id);
+  ctx.app.ctx.tasks.onChanges([{ productId: p1.id, companyId: p1.company_id, priceChanged: true,
+    before: { regular_price: 1870000 }, after: { regular_price: 9350 } }]);
+  const task = (await api.get('/api/tasks')).body.items[0];
+  assert.equal(ctx.db.get('SELECT suggested_price FROM tasks WHERE id=?', task.id).suggested_price, 13000);
+  assert.equal(task.suggested_price, null);
+  assert.equal(task.sale_units, 200);
+  assert.equal(task.site_sale_price, 1870000);
+  assert.match(task.suggestion_issue, /یکی برای بسته/);
+  ctx.db.run('UPDATE listings SET units=1 WHERE id=?', dk.id);
+  assert.equal((await api.post(`/api/tasks/${task.id}/done`, { platform_price: 1300 })).status, 409);
+  assert.equal(ctx.db.get('SELECT platform_price FROM listings WHERE id=?', dk.id).platform_price, 2633500);
+});
+
 test('inbox: a site price change makes one task per platform listing; later changes update it; done sets our price', async (t) => {
   const { ctx, api, s, company, p1, p2, w1, w2, dk } = await setup(t);
   const original = Number(w1.regular_price);

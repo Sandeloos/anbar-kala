@@ -4,6 +4,71 @@ const assert = require('node:assert/strict');
 const { makeApp, addUser, client, shop, addCompany } = require('./helpers');
 const { defaultMultiplier, priceUnitsSuggestion } = require('../../server/lib/pricing-defaults');
 const { priceFor } = require('../../server/lib/digikala');
+const { createSync } = require('../../server/lib/sync');
+const { radanPackEvidence, radanProductUrl } = require('../../server/lib/radan-packs');
+
+const km1Url = 'https://radiantajhiz.com/product/shomare-sim-feshari-km1/';
+const km1Option = { size: 200, unitPrice: 935, refUnit: 935, packPrice: 187000 };
+const selector = (...options) => `<div class="rpq-selector" data-options="${JSON.stringify(options).replace(/"/g, '&quot;')}"></div>`;
+
+test('Radan evidence requires the Woo reference price and consistent pack options', () => {
+  const km1 = selector(km1Option);
+  assert.deepEqual(radanPackEvidence(km1 + km1, 9350), { price_units: 1, sale_units: 200, sizes: [200] });
+  assert.deepEqual(radanPackEvidence(selector(km1Option, { ...km1Option, size: 100, packPrice: 93500 }), 9350),
+    { price_units: 1, sale_units: null, sizes: [100, 200] });
+  assert.equal(radanPackEvidence(km1, 1870000), null);
+  assert.equal(radanPackEvidence(km1 + selector({ ...km1Option, size: 100, packPrice: 93500 }), 9350), null);
+  assert.equal(radanPackEvidence(selector({ ...km1Option, packPrice: 935 }), 9350), null);
+  assert.equal(radanProductUrl('https://radiantajhiz.com', km1Url + '?source=test'), km1Url);
+  assert.equal(radanProductUrl('https://radiantajhiz.com', 'https://radiantajhiz.com.evil.test/product/km1/'), null);
+});
+
+test('refreshing KM1 holds the old basis for review and a verified 200-pack prices at 280,500 toman', async (t) => {
+  const ctx = await makeApp(); t.after(ctx.cleanup);
+  await addUser(ctx.db);
+  const api = client(ctx.app);
+  await api.login();
+  const shopSite = await shop(ctx, { count: 1, variableRatio: 0 });
+  const company = await addCompany(ctx, api, shopSite);
+  const { db, config } = ctx;
+  const { packaging, secrets, events } = ctx.app.ctx;
+  const p = db.get('SELECT * FROM products WHERE company_id = ?', company.id);
+  const name = 'شماره سیم فشاری KM1 جعبه ۲۰۰ تایی';
+  db.run("UPDATE companies SET site_url = ?, price_unit = 'rial' WHERE id = ?", 'https://radiantajhiz.com', company.id);
+  db.run('UPDATE products SET name = ?, regular_price = ?, units_per_pack = ?, sale_pack_units = ? WHERE id = ?', name, 9350, 200, 200, p.id);
+  const dkTitle = 'شماره سیم فشاری KM1 بسته ۲۰۰ عددی';
+  const listing = (await api.post('/api/listings', {
+    platform_id: 1, product_id: p.id, code: '83699223', title: dkTitle, units: 1, auto_price: false
+  })).body.listing;
+  const sync = createSync({
+    db, config, packaging, secrets, events,
+    fetchImpl: async (url, options) => {
+      if (String(url) === km1Url) {
+        assert.equal(options.redirect, 'error');
+        return new Response(selector(km1Option), { headers: { 'content-type': 'text/html' } });
+      }
+      assert.match(String(url), /\/products\/\d+/);
+      return Response.json({ id: p.woo_id, type: 'simple', name, permalink: km1Url, regular_price: '9350' });
+    }
+  });
+  const pending = await sync.refreshProduct(p.id);
+  assert.equal(pending.units_per_pack, 200);
+  assert.equal(pending.packaging_pending, 1);
+  const formula = { title: dkTitle, units: 200, margin_pct: 50, round_to: 1 };
+  assert.equal(priceFor(formula, pending), null);
+  const review = packaging.pending()[0];
+  assert.deepEqual(review.after.verified_pack, { price_units: 1, sale_units: 200, sizes: [200] });
+  assert.equal(review.listings[0].declared_units, 200);
+  const input = { version: pending.version, price_units: 1, sale_units: 200, listings: [{ id: listing.id, version: listing.version, units: 200 }] };
+  assert.equal((await api.post(`/api/products/${p.id}/packaging`, { ...input, price_units: 200 })).status, 409);
+  assert.equal((await api.post(`/api/products/${p.id}/packaging`, { ...input, sale_units: 1 })).status, 409);
+  assert.equal((await api.post(`/api/products/${p.id}/packaging`, { ...input, listings: [{ ...input.listings[0], units: 1 }] })).status, 409);
+  assert.equal((await api.post(`/api/products/${p.id}/packaging`, input)).status, 200);
+  const corrected = await sync.refreshProduct(p.id);
+  assert.deepEqual(priceFor(formula, corrected), { base: 1870000, price: 2805000 });
+  assert.equal(priceFor({ ...formula, units: 1 }, corrected), null);
+  assert.equal(packaging.pending().length, 0);
+});
 
 test('tool/non-tool defaults and price-based quantity suggestions do not confuse a unit price with a sales pack', () => {
   assert.equal(defaultMultiplier({ name: 'انبر پرس' }), 1.4);

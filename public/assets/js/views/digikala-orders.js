@@ -1,6 +1,6 @@
 import { get } from '../api.js';
-import { $, esc, fa, faDigits, moneyText, when, skeleton, empty, debounce } from '../ui.js';
-import { jalaliToday } from '../jalali.js';
+import { $, esc, fa, faDigits, moneyText, smartTime, when, skeleton, empty, debounce } from '../ui.js';
+import { jalaliToday, describeDate } from '../jalali.js';
 import { orderDateRange } from '../order-date-range.js';
 
 const SECTIONS = { active: 'فعال', processed: 'پردازش‌شده', returned: 'مرجوع‌شده', canceled: 'لغوشده' };
@@ -11,9 +11,8 @@ const errorBox = (message) => `<div class="callout callout-err" role="alert">${e
 const PAGE_SIZE = 30;
 
 export function renderDigikalaOrders(view, ctx, { platforms, companies, platform, filters }) {
-  const radan = companies.find(c => c.active && c.name.trim() === 'رادن');
   const today = jalaliToday();
-  let company = ctx.query.has('company') ? filters.company : String(radan?.id ?? 'all');
+  let company = filters.company || 'all';
   let query = filters.q;
   let selected = Object.hasOwn(SECTIONS, filters.status) ? filters.status : 'active';
   let page = 0;
@@ -26,28 +25,31 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
   let salesPoll;
 
   view.innerHTML = `
-    <div class="page-head"><div><h1>سفارش‌های دیجیکالا</h1><p>زمان سفارش‌ها به وقت تهران است. مبلغ فروش از پاسخ پنل فروشندگان خوانده می‌شود.</p></div>
-      <div class="page-actions"><button type="button" class="btn" id="dk-orders-refresh">تازه‌سازی</button>
-      <a class="btn" href="#/orders?view=internal">سوابق داخلی و ثبت دستی</a></div></div>
-    <div id="dk-orders-date"></div>
-    <div class="card toolbar dk-order-filters" aria-label="فیلتر سفارش‌های دیجیکالا">
+    <div class="page-head"><div><h1>سفارش‌های دیجیکالا</h1><p id="dk-orders-scope"></p></div>
+      <div class="page-actions"><button type="button" class="btn btn-sm" id="dk-orders-refresh">تازه‌سازی</button></div></div>
+    <details class="dk-order-filter-panel">
+      <summary class="btn btn-sm">فیلترها و بازهٔ تاریخ</summary>
+      <div id="dk-orders-date"></div>
+      <div class="toolbar dk-order-filters" aria-label="فیلتر سفارش‌های دیجیکالا">
       <div class="field"><label for="dk-orders-platform">پلتفرم</label><select id="dk-orders-platform" class="input">
         ${platforms.filter(p => p.active).map(p => `<option value="${p.id}"${p.id === platform.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>
       <div class="field"><label for="dk-orders-company">شرکت</label><select id="dk-orders-company" class="input">
         <option value="all">همهٔ شرکت‌ها</option>${companies.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
       <div class="field"><label for="dk-orders-search">جست‌وجوی سفارش</label>
         <input id="dk-orders-search" class="input" type="search" placeholder="شماره سفارش، شناسه ارسال، نام یا کد کالا" value="${esc(query)}"></div>
-    </div>
+      </div>
+      <a class="link small" href="#/orders?view=internal">سوابق داخلی و ثبت دستی</a>
+    </details>
+    <section class="card" aria-labelledby="dk-packages-title">
+      <div class="card-head"><div><h2 id="dk-packages-title">محموله‌های فروشنده</h2>
+        <p id="dk-packages-updated">فهرست کل حساب فروشندگی بر اساس تاریخ ایجاد محموله.</p></div></div>
+      <div id="dk-orders-packages" aria-live="polite"></div>
+    </section>
     <div id="dk-orders-sales" aria-live="polite"></div>
     <div class="seg" role="group" aria-label="وضعیت سفارش در دیجیکالا">
       ${Object.entries(SECTIONS).map(([key, title]) => `<button type="button" data-order-state="${key}" aria-pressed="${key === selected}">${title}</button>`).join('')}
     </div>
-    <section class="card" id="dk-orders-result" aria-label="نتیجهٔ سفارش‌ها" aria-live="polite"></section>
-    <section class="card" aria-labelledby="dk-packages-title">
-      <div class="card-head"><div><h2 id="dk-packages-title">محموله‌های فروشنده</h2>
-        <p>محموله‌های نوع سفارش بر اساس تاریخ ایجاد. فهرست برای کل حساب فروشندگی است.</p></div></div>
-      <div id="dk-orders-packages" aria-live="polite"></div>
-    </section>`;
+    <section class="card" id="dk-orders-result" aria-label="نتیجهٔ سفارش‌ها" aria-live="polite"></section>`;
   const result = $('#dk-orders-result', view);
   const salesBox = $('#dk-orders-sales', view);
   const packageBox = $('#dk-orders-packages', view);
@@ -57,8 +59,14 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
     $('#dk-orders-company', view).value = company;
   }
 
-  const updateUrl = () => ctx.setQuery({ platform: platform.id, company, q: query,
-    status: selected === 'active' ? '' : selected, from_date: range.from_date, to_date: range.to_date });
+  const updateUrl = () => {
+    ctx.setQuery({ platform: platform.id, company, q: query,
+      status: selected === 'active' ? '' : selected, from_date: range.from_date, to_date: range.to_date });
+    const start = describeDate(range.from_date);
+    const end = describeDate(range.to_date);
+    const companyName = $('#dk-orders-company', view).selectedOptions[0].textContent;
+    $('#dk-orders-scope', view).textContent = `${start === end ? start : `${start} تا ${end}`} · وقت تهران · ${companyName}`;
+  };
   const progressing = (p) => p && !p.complete && !p.error;
   const progressLabel = (p) => `${fa(p.pages)}${p.total !== null ? ` از ${fa(p.total)}` : ''} صفحه خوانده شد.`;
 
@@ -75,8 +83,7 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
     const label = selected === 'returned' || selected === 'canceled' ? 'جمع ارزش این وضعیت' : 'جمع مبلغ فروش این وضعیت';
     const hints = [
       s.missing_prices ? `${fa(s.missing_prices)} ردیف مبلغ کل ندارد و در جمع منظور نشده است.` : '',
-      data.invalid ? `${fa(data.invalid)} ردیف بدون شناسه یا زمان معتبر در نمایش و جمع منظور نشد.` : '',
-      data.unmatched ? `${fa(data.unmatched)} ردیف هنوز به کالای شرکت وصل نیست.${company !== 'all' ? ' برای دیدن آن‌ها «همهٔ شرکت‌ها» را انتخاب کنید.' : ''}` : ''
+      data.invalid ? `${fa(data.invalid)} ردیف بدون شناسه یا زمان معتبر در نمایش و جمع منظور نشد.` : ''
     ].filter(Boolean);
     result.innerHTML = `
       <div class="card-head"><div><h2>سفارش‌های ${SECTIONS[selected]}</h2>
@@ -90,18 +97,28 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
         <div class="metric tone-green"><dt>${label}${partial && s.total !== null ? ' (بخشی)' : ''}</dt><dd>${AMOUNT(s.total)}</dd></div>
       </dl>
       ${hints.length ? `<div class="callout callout-warn small"><ul>${hints.map(h => `<li>${esc(h)}</li>`).join('')}</ul></div>` : ''}
+      ${data.unmatched ? `<p class="callout callout-info small"><span><strong>${fa(data.unmatched)} قلم تطبیق‌نشده</strong> از دیجیکالا دریافت شده است. تأمین‌کنندهٔ این اقلام هنوز در انبار مشخص نیست.
+        ${company !== 'all' ? 'در فیلتر این شرکت نمایش داده نمی‌شوند.' : 'در فهرست دیده می‌شوند و اگر مبلغ داشته باشند، در جمع فروش دیجیکالا هم حساب می‌شوند.'}</span>
+        ${company !== 'all' ? '<button class="btn btn-sm" type="button" data-order-all>نمایش همهٔ شرکت‌ها</button>' : ''}</p>` : ''}
       ${data.rows.length ? `<div class="table-wrap"><table class="table">
         <thead><tr><th scope="col">سفارش و زمان</th><th scope="col">کالا</th><th scope="col">ارسال یا مهلت تحویل</th>
-          <th scope="col" class="col-num">تعداد</th><th scope="col" class="col-num">قیمت واحد</th><th scope="col" class="col-num">مبلغ ردیف</th></tr></thead>
+          <th scope="col" class="col-num">تعداد فروش</th><th scope="col" class="col-num">قیمت هر فروش در دیجیکالا</th><th scope="col" class="col-num">مبلغ ردیف</th></tr></thead>
         <tbody>${data.rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map(r => `<tr>
           <td class="cell-main"><span class="cell-title ltr">${faDigits(r.order_id)}</span><span class="cell-meta">${WHEN(r.ordered_at)}</span>
             ${r.local_order_id ? `<a class="link small" href="#/orders/${r.local_order_id}">ثبت داخلی</a>` : ''}</td>
           <td data-label="کالا"><span class="cell-title">${esc(r.title || 'عنوان در پاسخ موجود نیست')}</span>
-            <span class="cell-meta">DKPC ${faDigits(r.variant_id)} ${r.code ? ` · ${esc(r.code)}` : ''} · ${esc(r.company_name || 'شرکت نامشخص')}</span></td>
+            <span class="cell-meta">DKPC ${faDigits(r.variant_id)} ${r.code ? ` · ${esc(r.code)}` : ''} · ${r.company_name ? esc(r.company_name) : 'تطبیق‌نشده'}</span>
+            ${r.product_id ? `<details class="small muted"><summary>جزئیات تطبیق کالا</summary><a class="link" href="#/products/${r.product_id}">کالای متصل و مبنای قیمت سایت</a>
+                ${r.site_price ? `<div>قیمت سایت در ثبت سفارش
+              ${moneyText(r.site_price.amount, r.site_price.currency)} برای ${fa(r.site_price.price_units)} عدد
+              ${r.site_price.manual ? ' · دستی' : ''}${r.site_price.uncertain ? ' · نامطمئن' : ''}</div>` : ''}
+              </details>` : ''}
+            ${r.pack_mismatch ? '<div class="small muted">تعداد در عنوان دیجیکالا و تعداد ثبت‌شده یکسان نیست.</div>' : ''}</td>
           <td data-label="ارسال یا مهلت تحویل">${r.shipment_id ? `شناسهٔ ارسال ${faDigits(r.shipment_id)}` : r.commitment_date ? WHEN(r.commitment_date) : '—'}
             ${r.status ? `<div class="small muted">${esc(r.status)}</div>` : ''}</td>
-          <td data-label="تعداد" class="col-num">${NUMBER(r.qty)}</td>
-          <td data-label="قیمت واحد" class="col-num">${AMOUNT(r.unit_price)}</td>
+          <td data-label="تعداد فروش" class="col-num">${NUMBER(r.qty)}
+            ${r.sale_units ? `<div class="small muted">${fa(r.sale_units)} عدد در هر فروش${r.sale_units_from_title ? ' (از عنوان)' : ''}</div>` : ''}</td>
+          <td data-label="قیمت هر فروش در دیجیکالا" class="col-num">${AMOUNT(r.unit_price)}</td>
           <td data-label="مبلغ ردیف" class="col-num"><strong class="price">${AMOUNT(r.total_price)}</strong></td></tr>`).join('')}</tbody></table></div>
         ${pageCount > 1 ? `<div class="table-foot"><span>صفحهٔ ${fa(page + 1)} از ${fa(pageCount)}</span><div class="pager">
           <button type="button" class="btn btn-sm" data-order-page="-1"${page === 0 ? ' disabled' : ''}>قبلی</button>
@@ -157,13 +174,16 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
     }
   }
 
-  async function loadPackages() {
+  async function loadPackages(force = false) {
     const id = ++packageRequest;
     packageBox.innerHTML = skeleton(2);
     try {
-      const data = await get('/digikala/seller-packages', { from: range.from, to: range.to });
+      const data = await get('/digikala/seller-packages', { from: range.from, to: range.to, refresh: force ? '1' : '' });
       if (id !== packageRequest) return;
       if (data.error) { packageBox.innerHTML = errorBox(data.error); return; }
+      $('#dk-packages-updated', view).textContent = data.fetched_at
+        ? `کل حساب فروشندگی · آخرین همگام‌سازی ${smartTime(data.fetched_at)}`
+        : 'فهرست کل حساب فروشندگی بر اساس تاریخ ایجاد محموله.';
       packageBox.innerHTML = data.items.length ? `<div class="list">${data.items.map(p => `
         <details class="dk-package" data-package-id="${p.id}"><summary>
           <strong>محمولهٔ ${esc(faDigits(p.number || p.id))}</strong>
@@ -171,6 +191,7 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
           <span class="small muted">${esc(p.warehouse || '')}${p.delivery ? ` · ${esc(p.delivery)}` : ''}</span>
         </summary><p class="small muted">ایجاد ${WHEN(p.created_at)} · زمان پیش‌بینی‌شده ${WHEN(p.due_at)} · دریافت ${WHEN(p.received_at)}</p>
         <div data-package-body></div></details>`).join('')}</div>` : empty('truck', 'محموله‌ای در این بازه پیدا نشد');
+      if (data.warning) packageBox.insertAdjacentHTML('afterbegin', `<p class="callout callout-warn small">نسخهٔ ذخیره‌شده نمایش داده می‌شود. ${esc(data.warning)}</p>`);
     } catch (err) {
       if (id === packageRequest) packageBox.innerHTML = errorBox(err.message);
     }
@@ -190,6 +211,7 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
           <span class="small muted"> · ${esc(item.company || 'شرکت نامشخص')}</span></span>
         <span>انتظار ${NUMBER(item.expected)} · تحویل ${NUMBER(item.delivered)}</span></li>`).join('')}</ul>`
         : '<p class="small muted">قلمی در جزئیات محموله گزارش نشده است.</p>';
+      if (data.warning) body.insertAdjacentHTML('afterbegin', `<p class="callout callout-warn small">جزئیات ذخیره‌شده · ${esc(data.warning)}</p>`);
     } catch (err) {
       delete details.dataset.loaded;
       body.innerHTML = `${errorBox(err.message)}<a class="link small" href="https://seller.digikala.com/pwa/packages/${details.dataset.packageId}"
@@ -197,13 +219,13 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
     }
   }, true);
 
-  function refresh() { if (range) { void loadOrders(); void loadSales(); void loadPackages(); } }
+  function refresh(force = false) { if (range) { void loadOrders(); void loadSales(); void loadPackages(force); } }
   const dates = orderDateRange($('#dk-orders-date', view), {
     from: filters.from_date || today, to: filters.to_date || today, defaultToday: true,
     onApply(next) { range = next; page = 0; updateUrl(); refresh(); }
   });
   if (!dates.apply()) $('#dk-orders-date [data-days="0"]', view).click();
-  $('#dk-orders-refresh', view).onclick = refresh;
+  $('#dk-orders-refresh', view).onclick = () => refresh(true);
   $('#dk-orders-company', view).onchange = (e) => {
     company = e.target.value;
     page = 0;
@@ -224,7 +246,11 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
   }, 300);
   view.addEventListener('click', (e) => {
     const button = e.target.closest('button');
-    if (button?.dataset.orderState) {
+    if (button?.hasAttribute('data-order-all')) {
+      const select = $('#dk-orders-company', view);
+      select.value = 'all';
+      select.dispatchEvent(new Event('change'));
+    } else if (button?.dataset.orderState) {
       selected = button.dataset.orderState;
       page = 0;
       view.querySelectorAll('[data-order-state]').forEach(b => b.setAttribute('aria-pressed', String(b === button)));

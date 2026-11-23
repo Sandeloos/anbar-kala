@@ -107,7 +107,7 @@ module.exports = async function productRoutes(app) {
   function saveSettings(req, before, values) {
     if (before.packaging_pending) throw badRequest('ابتدا بسته‌بندی و تطبیق آگهی‌های این کالا را از «بررسی بسته‌بندی» تأیید کنید.');
     const after = { ...before, ...values };
-    after.sale_pack_units = values.sale_pack_units ?? (before.sale_pack_units == null || before.sale_pack_units === before.units_per_pack ? after.units_per_pack : before.sale_pack_units);
+    after.sale_pack_units = values.sale_pack_units ?? before.sale_pack_units ?? before.units_per_pack;
     const label = (r) => ({ ...r, sale_pack_units: r.sale_pack_units || r.units_per_pack, warehouse: warehouseLabel(r.warehouse_id), tracked: r.tracked ? 'بله' : 'خیر' });
     const changes = audit.diff(label(before), label(after), SETTING_FIELDS);
     const now = nowIso();

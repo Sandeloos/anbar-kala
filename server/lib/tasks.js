@@ -7,6 +7,7 @@
  * listing and kind; a later change updates it; a change back to where it started closes it.
  */
 const { nowIso, badRequest, notFound, conflict } = require('./util');
+const { declaredPackUnits, hasUnitPriceHint } = require('./sync');
 
 /** Same margin on the new site price, rounded to 1,000 rials (100 tomans). */
 function suggest(platformPrice, before, after) {
@@ -14,6 +15,24 @@ function suggest(platformPrice, before, after) {
   return Math.round((platformPrice * after) / before / 1000) * 1000;
 }
 const isLow = (status, qty, limit) => status === 'instock' && qty !== null && qty !== undefined && qty <= limit;
+
+function priceDetails({ product_description: description, ...t }) {
+  if (t.kind !== 'price' || t.status !== 'open') return t;
+  const titleUnits = declaredPackUnits(t.listing_title);
+  const saleUnits = titleUnits || t.listing_units;
+  const basisUnknown = t.packaging_pending || (t.units_per_pack > 1 && hasUnitPriceHint({ name: t.product_name, description }));
+  const priceIssue = titleUnits && titleUnits !== t.listing_units ? 'تعداد بسته در عنوان تنوع با تعداد ثبت‌شده فرق دارد.'
+    : basisUnknown ? 'مبنای قیمت سایت هنوز تأیید نشده است.' : null;
+  const factor = t.site_price_before > 0 && t.site_price_after > 0
+    ? Math.max(t.site_price_before, t.site_price_after) / Math.min(t.site_price_before, t.site_price_after) : 1;
+  const packSizedChange = [saleUnits, t.sale_pack_units, t.units_per_pack].some(n => n > 1 && factor > 1.5 && Math.abs(factor - n) / n < 0.15);
+  const suggestionIssue = priceIssue || (packSizedChange || t.basis_changed
+    ? 'قیمت قبلی و جدید ممکن است یکی برای بسته و دیگری برای یک عدد باشد؛ پیشنهاد این تغییر قابل استفاده نیست.' : null);
+  return { ...t, sale_units: saleUnits, price_issue: priceIssue, suggestion_issue: suggestionIssue,
+    suggested_price: suggestionIssue ? null : t.suggested_price,
+    site_sale_price: !priceIssue && t.current_site_price != null && t.units_per_pack > 0
+      ? Math.round(t.current_site_price * saleUnits / t.units_per_pack) : null };
+}
 
 function createTasks({ db, events, audit, settings, autoPriced = () => false }) {
   function listingsOf(productId) {
@@ -80,7 +99,9 @@ function createTasks({ db, events, audit, settings, autoPriced = () => false }) 
   }
 
   const COLS = `t.*, l.code AS listing_code, l.title AS listing_title, l.units AS listing_units, l.platform_price AS listing_platform_price,
-    pl.name AS platform_name, p.name AS product_name, p.units_per_pack, p.permalink, p.regular_price AS current_site_price, p.stock_status AS current_stock_status,
+    pl.name AS platform_name, p.name AS product_name, p.description AS product_description, p.units_per_pack,
+    p.sale_pack_units, p.packaging_pending, p.permalink, p.regular_price AS current_site_price, p.stock_status AS current_stock_status,
+    EXISTS (SELECT 1 FROM packaging_history h WHERE h.product_id=p.id AND h.created_at>t.created_at) AS basis_changed,
     p.stock_quantity AS current_stock_quantity, c.name AS company_name, c.currency, u.name AS closed_by_name`;
   const FROM = `FROM tasks t JOIN listings l ON l.id = t.listing_id JOIN platforms pl ON pl.id = t.platform_id JOIN products p ON p.id = t.product_id
     JOIN companies c ON c.id = t.company_id LEFT JOIN users u ON u.id = t.closed_by`;
@@ -88,7 +109,7 @@ function createTasks({ db, events, audit, settings, autoPriced = () => false }) 
   function one(id) {
     const t = db.get(`SELECT ${COLS} ${FROM} WHERE t.id = ?`, Number(id));
     if (!t) throw notFound('کار پیدا نشد.');
-    return t;
+    return priceDetails(t);
   }
 
   function list({ status = 'open', platform, kind, company } = {}) {
@@ -100,7 +121,7 @@ function createTasks({ db, events, audit, settings, autoPriced = () => false }) 
     if (kind) { where.push('t.kind = ?'); params.push(kind); }
     if (company) { where.push('t.company_id = ?'); params.push(Number(company)); }
     return db.all(`SELECT ${COLS} ${FROM} ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-                   ORDER BY ${status === 'open' ? 't.created_at' : 't.closed_at DESC'} LIMIT 500`, ...params);
+                   ORDER BY ${status === 'open' ? 't.created_at' : 't.closed_at DESC'} LIMIT 500`, ...params).map(priceDetails);
   }
 
   /** Done: the admin changed it on the platform. For price tasks, the price they set (rials). */
@@ -110,6 +131,7 @@ function createTasks({ db, events, audit, settings, autoPriced = () => false }) 
       if (t.status !== 'open') throw conflict('این کار قبلاً بسته شده است.');
       const now = nowIso();
       if (t.kind === 'price') {
+        if (t.price_issue) throw conflict(t.price_issue);
         if (!platformPrice) throw badRequest('قیمتی را که در پلتفرم گذاشتید وارد کنید.', { platform_price: 'لازم است' });
         db.run('UPDATE listings SET platform_price = ?, updated_at = ? WHERE id = ?', platformPrice, now, t.listing_id);
       }

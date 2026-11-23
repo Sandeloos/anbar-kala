@@ -140,12 +140,20 @@ test('order list waits for an explicit date range and includes the entire final 
 test('packaging review separates a unit price from a hundred-piece sale and confirms all listings', async ({ page }) => {
   await page.goto('/'); await page.fill('#login-username', 'boss'); await page.fill('#login-password', 'boss-password-1');
   await page.click('#login-form button[type=submit]'); await expect(page.locator('#shell')).toBeVisible();
-  await page.route('**/api/packaging/reviews', (route) => route.fulfill({ json: { items: [{ id: 1, product_id: 10, name: 'بست کابل قیمت هر عدد', reason: 'مبنای قیمت تغییر کرده', version: 3, units_per_pack: 100, sale_pack_units: 100, regular_price: 10000, before: { name: 'بست کابل بسته ۱۰۰ عددی', regular_price: 1000000, price_units: 100 }, listings: [{ id: 20, version: 5, units: 100, code: '501', platform_name: 'دیجی‌کالا' }] }] } }));
+  await page.route('**/api/packaging/reviews', (route) => route.fulfill({ json: { items: [{
+    id: 1, product_id: 10, name: 'بست کابل قیمت هر عدد', reason: 'مبنای قیمت تغییر کرده', version: 3,
+    units_per_pack: 100, sale_pack_units: 100, regular_price: 10000,
+    before: { name: 'بست کابل بسته ۱۰۰ عددی', regular_price: 1000000, price_units: 100 },
+    after: { verified_pack: { price_units: 1, sale_units: 100, sizes: [100] } },
+    listings: [{ id: 20, version: 5, units: 1, declared_units: 100, code: '501', platform_name: 'دیجی‌کالا' }]
+  }] } }));
   let saved;
   await page.route('**/api/products/10/packaging', async (route) => { saved = route.request().postDataJSON(); await route.fulfill({ json: { ok: true } }); });
   await page.goto('/#/digikala/packaging');
   await expect(page.locator('#view h1')).toHaveText('بررسی بسته‌بندی');
-  await page.fill('[data-price-units]', '۱');
+  await expect(page.locator('[data-price-units]')).toHaveValue('۱');
+  await expect(page.locator('[data-sale-units]')).toHaveValue('۱۰۰');
+  await expect(page.locator('[data-listing]')).toHaveValue('۱۰۰');
   await page.locator('[data-review] button[type=submit]').click();
   await expect.poll(() => saved?.price_units).toBe(1);
   expect(saved.sale_units).toBe(100);

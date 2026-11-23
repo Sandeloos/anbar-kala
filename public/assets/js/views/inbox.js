@@ -4,7 +4,7 @@
  * actually set (it becomes the listing's price). Stock tasks say what happened to the site stock.
  */
 import { get, post } from '../api.js';
-import { $, $$, esc, icon, fa, money, moneyText, delta, when, skeleton, empty, toast, openSheet, closeSheet, showError, fieldErrors, busy, debounce, copy, latin, inCurrency, STOCK } from '../ui.js';
+import { $, $$, esc, icon, fa, money, moneyText, delta, when, skeleton, empty, toast, openSheet, closeSheet, showError, fieldErrors, busy, debounce, copy, latin, STOCK } from '../ui.js';
 
 const STATUS = { done: ['انجام شد', 'badge-green'], dismissed: ['لازم نبود', ''], reverted: ['خودش برگشت', 'badge-blue'] };
 
@@ -32,11 +32,11 @@ export async function render(view, ctx) {
     let body;
     if (t.kind === 'price') {
       body = `<div class="task-facts">
-        <div><span class="field-label">قیمت سایت شرکت</span><span><span class="strike">${money(t.site_price_before, cur)}</span> ← <b class="price">${money(t.site_price_after, cur)}</b> ${delta(t.site_price_before, t.site_price_after)}</span></div>
-        <div><span class="field-label">قیمت فعلی ما در ${esc(t.platform_name)}</span><span>${t.listing_platform_price ? moneyText(t.listing_platform_price, 'toman') : '<span class="muted">ثبت نشده</span>'}</span></div>
-        <div><span class="field-label">پیشنهاد (همان حاشیه‌ی سود)</span><span>${t.suggested_price ? `<b class="price">${moneyText(t.suggested_price, 'toman')}</b>` : '<span class="muted">قیمت فعلی ما ثبت نشده؛ خودتان تعیین کنید</span>'}</span></div>
-        ${t.listing_units !== t.units_per_pack ? `<div><span class="field-label">این آگهی</span><span>${fa(t.listing_units)} عدد از بسته‌ی ${fa(t.units_per_pack)} عددی</span></div>` : ''}
-      </div>`;
+        <div><span class="field-label">قیمت سایت شرکت</span><span>${t.suggestion_issue ? money(t.current_site_price, cur) : `<span class="strike">${money(t.site_price_before, cur)}</span> ← <b class="price">${money(t.site_price_after, cur)}</b> ${delta(t.site_price_before, t.site_price_after)}`}</span>
+        ${t.price_issue ? '' : `<span class="small muted">برای ${fa(t.units_per_pack)} عدد</span>`}</div>
+        <div><span class="field-label">قیمت ثبت‌شده برای هر فروش در ${esc(t.platform_name)}</span><span>${t.listing_platform_price ? moneyText(t.listing_platform_price, 'toman') : 'ثبت نشده'}</span><span class="small muted">${fa(t.sale_units || t.listing_units)} عدد در هر فروش</span></div>
+        <div><span class="field-label">${t.suggestion_issue ? 'قیمت سایت برای تعداد همین فروش' : 'پیشنهاد قیمت هر فروش'}</span><span>${t.suggestion_issue ? moneyText(t.site_sale_price, cur) : t.suggested_price ? moneyText(t.suggested_price, 'toman') : 'پیشنهاد موجود نیست'}</span></div>
+      </div>${t.suggestion_issue ? `<p class="callout callout-warn small">${esc(t.suggestion_issue)}${t.price_issue ? ` <a class="link" href="#/products/${t.product_id}">بررسی کالا و بسته‌بندی</a>` : ''}</p>` : ''}`;
     } else {
       const perSale = t.qty_after !== null && t.qty_after !== undefined ? Math.floor((t.qty_after * t.units_per_pack) / t.listing_units) : null;
       body = `<div class="task-facts">
@@ -45,7 +45,7 @@ export async function render(view, ctx) {
       </div>`;
     }
     const foot = f.status === 'open'
-      ? `<div class="form-actions"><button class="btn btn-primary btn-sm" type="button" data-done>${icon('check')}انجام شد</button><button class="btn btn-ghost btn-sm" type="button" data-dismiss>لازم نیست</button></div>`
+      ? `<div class="form-actions">${t.price_issue ? '' : `<button class="btn btn-primary btn-sm" type="button" data-done>${icon('check')}${t.kind === 'price' ? 'ثبت قیمت اعمال‌شده' : 'انجام شد'}</button>`}<button class="btn btn-ghost btn-sm" type="button" data-dismiss>لازم نیست</button></div>`
       : `<div class="small muted"><span class="badge ${STATUS[t.status][1]}">${STATUS[t.status][0]}</span> ${esc(t.closed_by_name || '')} ${when(t.closed_at)}${t.done_price ? ` · قیمت گذاشته‌شده ${moneyText(t.done_price, 'toman')}` : ''}${t.note ? ` · ${esc(t.note)}` : ''}</div>`;
     return `<article class="card task" data-i="${i}">${head}${body}${foot}</article>`;
   }
@@ -76,10 +76,10 @@ export async function render(view, ctx) {
         try { await post(`/tasks/${t.id}/done`, {}); toast('ثبت شد.'); await load(); ctx.refreshCounts(); } catch (err) { toast(err.message, { error: true }); busy(b, false); }
         return;
       }
-      const body = openSheet('قیمت در پلتفرم عوض شد', `<form class="form" id="f-done" novalidate>
+      const body = openSheet('ثبت قیمت اعمال‌شده', `<form class="form" id="f-done" novalidate>
         <p><b>${esc(t.listing_title || t.product_name)}</b><br><span class="small muted">${esc(t.platform_name)} ${esc(t.listing_code || '')}</span></p>
-        <div class="field"><label for="dn-price">قیمتی که در ${esc(t.platform_name)} گذاشتید (تومان)</label><input id="dn-price" name="platform_price" inputmode="numeric" value="${t.suggested_price ? fa(inCurrency(t.suggested_price, 'toman')) : ''}">
-          <span class="hint">پیشنهاد با همان حاشیه‌ی قبلی پر شده؛ اگر عدد دیگری گذاشتید عوضش کنید.</span></div>
+        <div class="field"><label for="dn-price">قیمت هر فروشِ ${fa(t.sale_units || t.listing_units)} عددی در ${esc(t.platform_name)} (تومان)</label><input id="dn-price" name="platform_price" inputmode="numeric">
+          <span class="hint">قیمت اعمال‌شده در پنل فروشنده را وارد کنید. این فرم فقط در انبار ثبت می‌کند.</span></div>
         <div class="field"><label for="dn-note">یادداشت (اختیاری)</label><input id="dn-note" name="note"></div>
         <div class="form-actions"><button class="btn btn-primary" type="submit">ثبت</button></div></form>`);
       const form = $('#f-done', body);
@@ -87,7 +87,7 @@ export async function render(view, ctx) {
         ev.preventDefault();
         const price = latin(form.elements.platform_price.value).replace(/[,،٬\s]/g, '');
         if (!price) { fieldErrors(form, { platform_price: 'قیمت را وارد کنید.' }); return; }
-        try { await post(`/tasks/${t.id}/done`, { platform_price: price, note: form.elements.note.value.trim() || undefined }); closeSheet(); toast('ثبت شد؛ قیمت آگهی به‌روز شد.'); await load(); ctx.refreshCounts(); } catch (err) { showError(form, err); }
+        try { await post(`/tasks/${t.id}/done`, { platform_price: price, note: form.elements.note.value.trim() || undefined }); closeSheet(); toast('قیمت در انبار ثبت شد.'); await load(); ctx.refreshCounts(); } catch (err) { showError(form, err); }
       });
     }
     if (b.hasAttribute('data-dismiss')) {

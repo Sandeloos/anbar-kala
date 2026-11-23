@@ -111,7 +111,7 @@ function salesSummary({ active, processed }) {
     overlaps: contested.size, omitted };
 }
 
-function createOrderReport({ db, client, connection, variantIdOf, log }) {
+function createOrderReport({ db, client, connection, variantIdOf, snapshots, guessUnits, log }) {
   const cache = new Map();
   let historyScans = 0;
 
@@ -148,6 +148,19 @@ function createOrderReport({ db, client, connection, variantIdOf, log }) {
         validationFields: Object.keys(err.errors || {}) }, 'Could not read Digikala order report');
       return { error: errorFor(err) };
     }
+  }
+
+  async function savedPackage(kind, key, fetch, { refresh = false, ttl = 5 * 60_000 } = {}) {
+    const scope = snapshots.account();
+    const saved = snapshots.get(scope, kind, key);
+    if (saved && !refresh && Date.now() - Date.parse(saved.checked_at) < ttl) return { ...saved.data, fetched_at: saved.checked_at };
+    const result = await section([kind, key, refresh], async api => {
+      const data = await fetch(api);
+      return snapshots.put(scope, kind, key, data);
+    });
+    if (scope !== snapshots.account()) return { error: 'حساب فروشندگی تغییر کرده است؛ دوباره تلاش کنید.' };
+    if (result.error) return saved ? { ...saved.data, fetched_at: saved.checked_at, warning: result.error } : result;
+    return { ...result.data, fetched_at: result.checked_at };
   }
 
   async function history(api, kind, window) {
@@ -193,7 +206,8 @@ function createOrderReport({ db, client, connection, variantIdOf, log }) {
 
   function listings() {
     const found = new Map();
-    const rows = db.all(`SELECT l.code, p.id AS product_id, c.id AS company_id, c.name AS company_name
+    const rows = db.all(`SELECT l.id AS listing_id, l.code, l.units, p.id AS product_id,
+                         c.id AS company_id, c.name AS company_name, c.currency
                          FROM listings l JOIN platforms pl ON pl.id=l.platform_id
                          JOIN products p ON p.id=l.product_id JOIN companies c ON c.id=p.company_id
                          WHERE pl.code='digikala' AND l.code IS NOT NULL`);
@@ -222,6 +236,18 @@ function createOrderReport({ db, client, connection, variantIdOf, log }) {
     const mapped = listings();
     const local = new Map(db.all(`SELECT id, order_number FROM orders WHERE source='digikala'
       AND ordered_at>=? AND ordered_at<?`, window.from, window.to).map(row => [row.order_number, row.id]));
+    const localPrices = new Map();
+    const priceRows = db.all(`SELECT o.order_number, l.listing_id, l.site_price, l.units_per_pack,
+      l.price_uncertain, l.site_price_source FROM orders o JOIN order_lines l ON l.order_id=o.id
+      WHERE o.source='digikala' AND o.ordered_at>=? AND o.ordered_at<?
+        AND l.listing_id IS NOT NULL AND l.site_price IS NOT NULL`, window.from, window.to);
+    for (const price of priceRows) {
+      const key = `${price.order_number}:${price.listing_id}`;
+      const old = localPrices.get(key);
+      if (!localPrices.has(key)) localPrices.set(key, price);
+      else if (old && (old.site_price !== price.site_price || old.units_per_pack !== price.units_per_pack ||
+        old.price_uncertain !== price.price_uncertain || old.site_price_source !== price.site_price_source)) localPrices.set(key, null);
+    }
     const term = searchKey(q || '');
     const sections = Object.fromEntries(kinds.map((kind, i) => {
       const response = responses[i];
@@ -232,7 +258,14 @@ function createOrderReport({ db, client, connection, variantIdOf, log }) {
       const rows = matching.flatMap(row => {
         const match = mapped.get(row.variant_id);
         if (company && match?.company_id !== company) return [];
-        return [{ ...row, company_name: match?.company_name ?? null, local_order_id: local.get(row.order_id) ?? null }];
+        const units = guessUnits(row.title);
+        const mismatch = Boolean(units && match?.units && units !== match.units);
+        const site = match && localPrices.get(`${row.order_id}:${match.listing_id}`);
+        return [{ ...row, company_name: match?.company_name ?? null, product_id: match?.product_id ?? null,
+          sale_units: units || match?.units || null, sale_units_from_title: Boolean(units && (!match || mismatch)),
+          pack_mismatch: mismatch, local_order_id: local.get(row.order_id) ?? null,
+          site_price: site ? { amount: site.site_price, price_units: site.units_per_pack, currency: match.currency,
+            uncertain: Boolean(site.price_uncertain), manual: site.site_price_source === 'manual' } : null }];
       }).sort((a, b) => b.ordered_at.localeCompare(a.ordered_at));
       const known = rows.filter(row => row.total_price !== null);
       const unmatched = matching.filter(row => !mapped.get(row.variant_id)).length;
@@ -248,25 +281,24 @@ function createOrderReport({ db, client, connection, variantIdOf, log }) {
     return { window, sections, sales: sections.active && sections.processed ? salesSummary(sections) : null };
   }
 
-  async function packages({ from, to }) {
+  async function packages({ from, to, refresh }) {
     const window = reportRange(from, to);
-    return section(['packages', window.from, window.to], async api => {
+    return savedPackage('packages', JSON.stringify([window.from, window.to]), async api => {
       const raw = await paged((page, signal) => api.packages({ page, size: PAGE_SIZE, from: window.from, to: window.to, signal }));
       const items = raw.map(r => ({ id: idOf(r.package_id), number: r.package_number, status: label(r.status),
         created_at: iso(r.created_at), due_at: iso(r.received_at_forecast), received_at: iso(r.effective_received_date || r.received_at),
         warehouse: r.warehouse?.title, delivery: label(r.delivery_type) }));
       const filtered = items.filter(r => r.id && inRange(r.created_at, window));
-      return { items: [...new Map(filtered.map(row => [row.id, row])).values()], fetched_at: new Date().toISOString() };
-    });
+      return { items: [...new Map(filtered.map(row => [row.id, row])).values()] };
+    }, { refresh: refresh === '1' });
   }
 
   async function packageDetails(id) {
-    return section(['package', id], async api => {
+    const result = await savedPackage('package', String(id), async api => {
       const raw = await paged((page, signal) => api.packageDetails({ id, page, signal }));
-      const mapped = listings();
       const items = raw.flatMap(({ package_products: p }) => Array.isArray(p) ? p : p ? [p] : []).map(r => ({
         id: idOf(r.package_item_id), title: r.title, variant_id: idOf(r.dkpc), expected: number(r.ordered_count),
-        delivered: number(r.delivered_count), company: mapped.get(idOf(r.dkpc))?.company_name ?? null
+        delivered: number(r.delivered_count)
       }));
       const seen = new Set();
       return { items: items.filter(row => {
@@ -276,6 +308,11 @@ function createOrderReport({ db, client, connection, variantIdOf, log }) {
         return true;
       }) };
     });
+    if (result.error) return result;
+    const mapped = listings();
+    return { ...result, items: result.items.map(item => ({
+      ...item, company: mapped.get(item.variant_id)?.company_name ?? null
+    })) };
   }
 
   return { orders, packages, packageDetails };

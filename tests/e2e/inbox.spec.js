@@ -29,8 +29,9 @@ test('a price change on the company site shows up in the inbox live; done record
   const card = page.locator('.task', { hasText: 'DK-INBOX' });
   await expect(card).toBeVisible({ timeout: 10000 });
   await expect(card).toContainText('پیشنهاد');
-  await card.getByRole('button', { name: 'انجام شد' }).click();
-  await expect(page.locator('#dn-price')).not.toHaveValue('');
+  await card.getByRole('button', { name: 'ثبت قیمت اعمال‌شده' }).click();
+  await expect(page.locator('#dn-price')).toHaveValue('');
+  await expect(page.locator('#f-done')).toContainText('این فرم فقط در انبار ثبت می‌کند');
   await page.fill('#dn-price', '۱٬۰۸۰٬۰۰۰');
   await page.click('#f-done button[type=submit]');
   await expect(card).toHaveCount(0);

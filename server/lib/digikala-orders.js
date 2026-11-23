@@ -1,5 +1,6 @@
 'use strict';
 const { nowIso, conflict } = require('./util');
+const { declaredPackUnits } = require('./sync');
 
 /** API boundary: validate before handing money/stock work to the existing orders module. */
 function normalizeOrder(raw) {
@@ -30,9 +31,11 @@ function createDigikalaOrders({ db, client, connection, orders, audit, events })
       const platform = db.get("SELECT id FROM platforms WHERE code = 'digikala'");
       const lines = remote.items.map((i) => {
         const variant = i.variant_id ?? i.product_variant_id;
-        const listing = db.get(`SELECT id FROM listings WHERE platform_id = ? AND
+        const listing = db.get(`SELECT id, units FROM listings WHERE platform_id = ? AND
           (code = ? OR code = ? OR code = ?)`, platform.id, String(variant), `DKPC-${variant}`, `DKPC ${variant}`);
         if (!listing) throw conflict(`تنوع ${variant ?? 'نامشخص'} به کالای سایت متصل نیست؛ ابتدا تطبیق آگهی را انجام دهید.`);
+        const declared = declaredPackUnits(i.product_variant_title);
+        if (declared && declared !== listing.units) throw conflict(`تعداد هر فروش تنوع ${variant} با بستهٔ ${declared} عددی دیجیکالا یکسان نیست؛ تطبیق را بررسی کنید.`);
         const qty = Number(i.quantity ?? i.count);
         const price = Number(i.selling_price ?? i.price);
         if (!Number.isSafeInteger(qty) || qty < 1 || !Number.isSafeInteger(price) || price < 0 || (i.selling_price == null && i.price == null)) throw conflict('تعداد یا قیمت فروش اقلام معتبر نیست.');
