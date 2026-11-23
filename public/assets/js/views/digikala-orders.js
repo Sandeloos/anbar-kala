@@ -20,6 +20,7 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
   let range;
   let report;
   let ordersRequest = 0;
+  let salesRequest = 0;
   let packageRequest = 0;
 
   view.innerHTML = `
@@ -101,15 +102,30 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
       <p class="small muted">مبلغ ردیف شامل تعدیل‌های اعلام‌شده در پاسخ دیجیکالاست. جمع هر وضعیت جداست.</p>`;
   }
 
+  const queryFor = (section) => ({
+    from: range.from, to: range.to, company: company === 'all' ? '' : company, q: query, section
+  });
+
   async function loadOrders() {
     const id = ++ordersRequest;
     report = null;
-    salesBox.innerHTML = '';
     result.innerHTML = skeleton(4);
     try {
-      const data = await get('/digikala/order-report', { from: range.from, to: range.to, company: company === 'all' ? '' : company, q: query });
+      const data = await get('/digikala/order-report', queryFor(selected));
       if (id !== ordersRequest) return;
       report = data;
+      paintOrders();
+    } catch (err) {
+      if (id === ordersRequest) result.innerHTML = errorBox(err.message);
+    }
+  }
+
+  async function loadSales() {
+    const id = ++salesRequest;
+    salesBox.innerHTML = '<p class="small muted">در حال خواندن جمع سفارش‌های فعال و پردازش‌شده…</p>';
+    try {
+      const data = await get('/digikala/order-report', queryFor('sales'));
+      if (id !== salesRequest) return;
       const sales = data.sales;
       salesBox.innerHTML = sales ? `<section class="card dk-order-sales" aria-label="جمع سفارش‌های فعال و پردازش‌شده">
         <div><h2>${sales.omitted ? 'جمع قابل محاسبهٔ سفارش‌های فعال و پردازش‌شده' : 'جمع سفارش‌های فعال و پردازش‌شده'}</h2>
@@ -117,10 +133,9 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
         <strong class="price">${AMOUNT(sales.total)}</strong>
         ${sales.omitted ? `<p class="small muted">${fa(sales.omitted)} ردیف در جمع نیامده است.${sales.overlaps
           ? ` ${fa(sales.overlaps)} ترکیب سفارش و تنوع در هر دو وضعیت دیده شد و برای جلوگیری از شمارش دوباره کنار گذاشته شد.` : ''}</p>` : ''}
-      </section>` : '';
-      paintOrders();
+      </section>` : '<p class="small muted">جمع فعال و پردازش‌شده در دسترس نیست. مبلغ هر وضعیت را جداگانه ببینید.</p>';
     } catch (err) {
-      if (id === ordersRequest) result.innerHTML = errorBox(err.message);
+      if (id === salesRequest) salesBox.innerHTML = errorBox(err.message);
     }
   }
 
@@ -163,7 +178,7 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
     }
   }, true);
 
-  function refresh() { if (range) { void loadOrders(); void loadPackages(); } }
+  function refresh() { if (range) { void loadOrders(); void loadSales(); void loadPackages(); } }
   const dates = orderDateRange($('#dk-orders-date', view), {
     from: filters.from_date || today, to: filters.to_date || today, defaultToday: true,
     onApply(next) { range = next; page = 0; updateUrl(); refresh(); }
@@ -175,6 +190,7 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
     page = 0;
     updateUrl();
     void loadOrders();
+    void loadSales();
   };
   $('#dk-orders-platform', view).onchange = (e) => {
     const params = new URLSearchParams({ view: 'internal', platform: e.target.value, from_date: range.from_date, to_date: range.to_date });
@@ -185,6 +201,7 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
     page = 0;
     updateUrl();
     void loadOrders();
+    void loadSales();
   }, 300);
   view.addEventListener('click', (e) => {
     const button = e.target.closest('button');
@@ -193,11 +210,11 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
       page = 0;
       view.querySelectorAll('[data-order-state]').forEach(b => b.setAttribute('aria-pressed', String(b === button)));
       updateUrl();
-      paintOrders();
+      void loadOrders();
     } else if (button?.dataset.orderPage) {
       page += Number(button.dataset.orderPage);
       paintOrders();
     }
   });
-  return () => { ordersRequest++; packageRequest++; };
+  return () => { ordersRequest++; salesRequest++; packageRequest++; };
 }

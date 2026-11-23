@@ -12,7 +12,8 @@ module.exports = async function digikalaRoutes(app) {
   const reportDates = z.object({ from: z.iso.datetime().optional(), to: z.iso.datetime().optional() });
 
   app.get('/digikala/order-report', async (req) => digikala.orderReport.orders(reportDates.extend({
-    company: z.coerce.number().int().positive().optional(), q: optText(180).optional()
+    company: z.coerce.number().int().positive().optional(), q: optText(180).optional(),
+    section: z.enum(['active', 'processed', 'returned', 'canceled', 'sales']).optional()
   }).parse(req.query)));
   app.get('/digikala/seller-packages', async (req) => digikala.orderReport.packages(reportDates.parse(req.query)));
   app.get('/digikala/seller-packages/:id', async (req) => {

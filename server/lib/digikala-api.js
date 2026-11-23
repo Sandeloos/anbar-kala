@@ -205,8 +205,8 @@ function createDigikalaClient({ baseUrl, tokens, fetchImpl, userAgent, timeoutMs
         'search[type]': 'order_fulfilment', 'search[package_created_at_from]': from, 'search[package_created_at_to]': to });
       return call('GET', `/packages?${q}`);
     },
-    packageDetails({ id, page, size }) {
-      return call('GET', `/packages/${id}?${new URLSearchParams({ page, size })}`);
+    packageDetails({ id, page }) {
+      return call('GET', page === 1 ? `/packages/${id}` : `/packages/${id}?page=${page}`);
     }
   };
 }

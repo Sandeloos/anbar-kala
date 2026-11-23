@@ -124,7 +124,8 @@ function createOrderReport({ db, client, connection, variantIdOf, log }) {
     try { return await read(key, fetch); }
     catch (err) {
       if (err.statusCode === 409) return { error: err.message };
-      log?.warn({ source: key[0], upstreamStatus: err.status }, 'Could not read Digikala order report');
+      log?.warn({ source: key[0], upstreamStatus: err.status, upstreamCode: err.code,
+        validationFields: Object.keys(err.errors || {}) }, 'Could not read Digikala order report');
       return { error: errorFor(err) };
     }
   }
@@ -145,9 +146,10 @@ function createOrderReport({ db, client, connection, variantIdOf, log }) {
     return found;
   }
 
-  async function orders({ from, to, company, q }) {
+  async function orders({ from, to, company, q, section: requested }) {
     const window = reportRange(from, to);
-    const responses = await Promise.all(ORDER_SECTIONS.map(kind => section([kind, window.from, window.to], async api => {
+    const kinds = requested === 'sales' ? ['active', 'processed'] : requested ? [requested] : ORDER_SECTIONS;
+    const responses = await Promise.all(kinds.map(kind => section([kind, window.from, window.to], async api => {
       const raw = await paged(page => api.orders({ page, size: PAGE_SIZE,
         ...(kind === 'active' ? { today: window.today } : { type: kind, from: window.from, to: window.to }) }));
       return { ...uniqueOrderLines(raw, kind, window), fetched_at: new Date().toISOString() };
@@ -156,7 +158,7 @@ function createOrderReport({ db, client, connection, variantIdOf, log }) {
     const local = new Map(db.all(`SELECT id, order_number FROM orders WHERE source='digikala'
       AND ordered_at>=? AND ordered_at<?`, window.from, window.to).map(row => [row.order_number, row.id]));
     const term = searchKey(q || '');
-    const sections = Object.fromEntries(ORDER_SECTIONS.map((kind, i) => {
+    const sections = Object.fromEntries(kinds.map((kind, i) => {
       const response = responses[i];
       if (response.error) return [kind, response];
       const matching = response.rows.filter(row => !term || searchKey(`${row.order_id} ${row.variant_id} ${row.shipment_id || ''} ${row.code || ''} ${row.title || ''}`).includes(term));
@@ -175,7 +177,7 @@ function createOrderReport({ db, client, connection, variantIdOf, log }) {
           rows: rows.length, missing_prices: rows.length - known.length,
           total: known.length || !(rows.length || excluded || response.invalid) ? known.reduce((sum, row) => sum + row.total_price, 0) : null } }];
     }));
-    return { window, sections, sales: salesSummary(sections) };
+    return { window, sections, sales: sections.active && sections.processed ? salesSummary(sections) : null };
   }
 
   async function packages({ from, to }) {
@@ -192,7 +194,7 @@ function createOrderReport({ db, client, connection, variantIdOf, log }) {
 
   async function packageDetails(id) {
     return section(['package', id], async api => {
-      const raw = await paged((page) => api.packageDetails({ id, page, size: PAGE_SIZE }));
+      const raw = await paged((page) => api.packageDetails({ id, page }));
       const mapped = listings();
       const items = raw.flatMap(({ package_products: p }) => Array.isArray(p) ? p : p ? [p] : []).map(r => ({
         id: idOf(r.package_item_id), title: r.title, variant_id: idOf(r.dkpc), expected: number(r.ordered_count),

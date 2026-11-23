@@ -14,11 +14,15 @@ const faDigits = (s) => String(s).replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d
 test('today opens on Digikala and Radan with official amounts and package details', async ({ page }) => {
   const requests = [];
   const now = new Date().toISOString();
+  let releaseSales;
+  const salesReady = new Promise(resolve => { releaseSales = resolve; });
   await page.route('**/api/companies', (route) => route.fulfill({ json: { items: [
     { id: 10, name: 'رادن', active: 1 }, { id: 11, name: 'شرکت دیگر', active: 1 }
   ] } }));
-  await page.route('**/api/digikala/order-report?*', (route) => {
-    requests.push(new URL(route.request().url()));
+  await page.route('**/api/digikala/order-report?*', async (route) => {
+    const request = new URL(route.request().url());
+    requests.push(request);
+    if (request.searchParams.get('section') === 'sales') await salesReady;
     return route.fulfill({ json: { sales: { orders: 1, total: 197000, overlaps: 0, omitted: 1 }, sections: { active: {
       fetched_at: now, unmatched: 1, invalid: 0, excluded_unmatched: 1,
       summary: { orders: 1, shipments: 0, rows: 1, missing_prices: 0, total: 197000 },
@@ -37,6 +41,8 @@ test('today opens on Digikala and Radan with official amounts and package detail
   await page.locator('.metric[href="#/orders?period=today"]').click();
   await expect(page.getByLabel('پلتفرم', { exact: true })).toHaveValue('1');
   await expect(page.getByLabel('شرکت', { exact: true })).toHaveValue('10');
+  await expect(page.locator('#dk-orders-result tbody tr')).toContainText('۱۱٬۰۰۰ تومان');
+  releaseSales();
   await expect(page.locator('#dk-orders-sales')).toContainText('۱۹٬۷۰۰ تومان');
   await expect(page.locator('#dk-orders-sales')).toContainText('۱ ردیف در جمع نیامده است');
   await expect(page.locator('#dk-orders-result .metric').last()).toContainText('۱۹٬۷۰۰ تومان');
