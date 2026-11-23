@@ -29,7 +29,7 @@ export async function render(view, ctx) {
       </div>
       ${errors.length ? `<div class="callout callout-err" role="alert">${icon('alert')}<div><strong>اتصال ${fa(errors.length)} شرکت مشکل دارد:</strong> ${errors.map((c) => `<a class="link" href="#/companies/${c.id}">${esc(c.name)}</a>`).join('، ')}. قیمت‌های این شرکت‌ها تا رفع مشکل به‌روز نمی‌شود.</div></div>` : ''}
       <div class="metrics">
-        <a class="metric" href="#/orders?period=today">${icon('cart')}<strong>${fa(d.ops.orders_today)}</strong><span>سفارش امروز (${fa(d.ops.lines_today)} قلم)</span></a>
+        <a class="metric" href="#/orders?period=today">${icon('cart')}<strong>سفارش‌ها</strong><span>امروز · منبع دیجیکالا</span></a>
         <a class="metric tone-orange" href="#/receiving">${icon('truck')}<strong>${fa(d.ops.receiving_due)}</strong><span>ردیف منتظر دریافت از روزهای قبل</span></a>
         <a class="metric tone-green" href="#/inbox">${icon('inbox')}<strong>${fa(d.ops.tasks_open)}</strong><span>کار باز در کارتابل (دیجی‌کالا و باسلام)</span></a>
         <a class="metric tone-red" href="#/stock">${icon('layers')}<strong>${fa(d.ops.consigned_units)}</strong><span>عدد کالای امانی شرکت‌ها در انبار ما</span></a>
@@ -38,7 +38,7 @@ export async function render(view, ctx) {
       ${d.products.needs_setup ? `<div class="callout callout-warn">${icon('edit')}<span>${fa(d.products.needs_setup)} کالا هنوز «تعداد در بسته»اش تأیید نشده. <a class="link" href="#/products?setup=guessed">بررسی و تأیید</a></span></div>` : ''}
       <div class="grid grid-main">
         <section class="card" aria-labelledby="dash-days">
-          <div class="card-head"><div><h2 id="dash-days">سفارش‌های ۱۴ روز گذشته</h2><p>تعداد سفارش در هر روز؛ روی هر ستون بروید تا جزئیاتش را ببینید.</p></div><a class="btn btn-sm btn-ghost" href="#/orders">سفارش‌ها</a></div>
+          <div class="card-head"><div><h2 id="dash-days">ثبت‌های داخلی ۱۴ روز گذشته</h2><p>سفارش‌های ثبت‌شده در انبار، شامل ثبت دستی و اکسل.</p></div><a class="btn btn-sm btn-ghost" href="#/orders?view=internal">سوابق داخلی</a></div>
           <div class="chart" id="days-chart"></div>
         </section>
         <section class="card card-flush" aria-labelledby="dash-acc">

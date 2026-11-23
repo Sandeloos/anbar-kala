@@ -9,6 +9,16 @@ const { z, intIn, optText } = require('./validate');
 module.exports = async function digikalaRoutes(app) {
   const { digikala } = app.ctx;
   const manager = { config: { manager: true } };
+  const reportDates = z.object({ from: z.iso.datetime().optional(), to: z.iso.datetime().optional() });
+
+  app.get('/digikala/order-report', async (req) => digikala.orderReport.orders(reportDates.extend({
+    company: z.coerce.number().int().positive().optional(), q: optText(180).optional()
+  }).parse(req.query)));
+  app.get('/digikala/seller-packages', async (req) => digikala.orderReport.packages(reportDates.parse(req.query)));
+  app.get('/digikala/seller-packages/:id', async (req) => {
+    const id = intIn('شناسهٔ محموله', 1, Number.MAX_SAFE_INTEGER).parse(req.params.id);
+    return digikala.orderReport.packageDetails(id);
+  });
 
   app.get('/digikala', async (req) => ({
     status: digikala.status(),

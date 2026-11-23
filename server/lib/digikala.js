@@ -30,6 +30,7 @@ const { guessUnits } = require('./sync');
 const { createReferenceRequests } = require('./digikala-reference');
 const { createBuybox } = require('./digikala-buybox');
 const { createDigikalaOrders } = require('./digikala-orders');
+const { createOrderReport } = require('./digikala-order-report');
 const { plain, readProductDescription } = require('./product-content');
 
 const MODES = { off: 'خاموش', dry_run: 'آزمایشی (چیزی فرستاده نمی‌شود)', live: 'فعال' };
@@ -66,11 +67,21 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
         secrets.encrypt(access), refresh ? secrets.encrypt(refresh) : null, expiresAt || null, nowIso());
     }
   };
-  const client = () => { const c = conn(); return createDigikalaClient({ baseUrl: c.base_url, userAgent: c.user_agent, tokens, fetchImpl, retryBaseMs }); };
+  let apiClient;
+  let apiSettings;
+  const client = () => {
+    const { base_url: baseUrl, user_agent: userAgent } = conn();
+    if (!apiClient || baseUrl !== apiSettings.baseUrl || userAgent !== apiSettings.userAgent) {
+      apiSettings = { baseUrl, userAgent };
+      apiClient = createDigikalaClient({ ...apiSettings, tokens, fetchImpl, retryBaseMs });
+    }
+    return apiClient;
+  };
 
   const reference = createReferenceRequests({ db, client, connection: conn, audit, events });
   const buybox = createBuybox({ db, client, connection: conn, audit, events, priceFor, variantIdOf, onRefused: buyboxRefused });
   const orderSync = createDigikalaOrders({ db, client, connection: conn, orders, audit, events });
+  const orderReport = createOrderReport({ db, client, connection: conn, variantIdOf, log });
 
   /* ------------------------------------------------------------ connection (manager) */
   function status() {
@@ -554,7 +565,7 @@ function createDigikala({ db, secrets, audit, events, log, orders, fetchImpl, re
   });
 
   return {
-    reference, buybox, orderSync, status, setKey, connect, setSettings, enqueue, onChanges, handles, kick, processDue, approve, reject, reactivate, recoverBlocked, reprice, jobs, blocked,
+    reference, buybox, orderSync, orderReport, status, setKey, connect, setSettings, enqueue, onChanges, handles, kick, processDue, approve, reject, reactivate, recoverBlocked, reprice, jobs, blocked,
     importPreview, importCreate, priceFor, variantIdOf, MODES
   };
 }

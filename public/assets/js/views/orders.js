@@ -13,6 +13,7 @@ import { createPicker } from '../picker.js';
 import { jalaliToday, timeNow, toIso, describeDate, readDate, readTime } from '../jalali.js';
 import { orderDateRange } from '../order-date-range.js';
 import { entryHtml } from './timeline.js';
+import { renderDigikalaOrders } from './digikala-orders.js';
 
 export async function render(view, ctx, params) {
   if (params[0] === 'new') return renderNew(view, ctx);
@@ -36,11 +37,15 @@ export function lineStatus(l) {
 async function renderList(view, ctx) {
   const f = Object.fromEntries(['q', 'platform', 'company', 'status', 'from_date', 'to_date', 'page'].map((k) => [k, ctx.query.get(k) || '']));
   const [{ items: platforms }, { items: companies }] = await Promise.all([get('/platforms'), get('/companies')]);
+  const digikala = platforms.find(p => p.code === 'digikala' && p.active);
+  if (digikala && (!ctx.query.has('platform') || f.platform === String(digikala.id)) && ctx.query.get('view') !== 'internal') {
+    return renderDigikalaOrders(view, ctx, { platforms, companies, platform: digikala, filters: f });
+  }
   let data = null;
   let selectedRange = null;
   view.innerHTML = `
     <div class="page-head">
-      <div><h1>سفارش‌ها</h1><p>هر سفارش با قیمت سایت شرکت در همان ساعت سفارش ثبت می‌شود.</p></div>
+      <div><h1>سوابق داخلی سفارش‌ها</h1><p>سفارش‌های ثبت‌شده در انبار و مبلغ شرکت در زمان ثبت.</p></div>
       <div class="page-actions"><a class="btn" href="#/orders/import">${icon('download')}ورود از اکسل</a><a class="btn btn-primary" href="#/orders/new">${icon('plus')}سفارش جدید</a></div>
     </div>
     <div id="o-range"></div>
@@ -81,7 +86,7 @@ async function renderList(view, ctx) {
   }
   async function load() {
     if (!selectedRange) { $('#o-list', view).innerHTML = '<p class="muted" style="padding:18px">برای دیدن سفارش‌ها، ابتدا تاریخ را مشخص کنید.</p>'; return; }
-    ctx.setQuery(f);
+    ctx.setQuery({ ...f, view: 'internal' });
     try {
       data = await get('/orders', { q: f.q, platform: f.platform, company: f.company, status: f.status, page: f.page, ...selectedRange });
       paint();

@@ -11,6 +11,47 @@ async function signIn(page) {
 const laptopOnly = (testInfo) => test.skip(testInfo.project.name !== 'laptop', 'changes shared data; runs once');
 const faDigits = (s) => String(s).replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d]);
 
+test('today opens on Digikala and Radan with official amounts and package details', async ({ page }) => {
+  const requests = [];
+  const now = new Date().toISOString();
+  await page.route('**/api/companies', (route) => route.fulfill({ json: { items: [
+    { id: 10, name: 'رادن', active: 1 }, { id: 11, name: 'شرکت دیگر', active: 1 }
+  ] } }));
+  await page.route('**/api/digikala/order-report?*', (route) => {
+    requests.push(new URL(route.request().url()));
+    return route.fulfill({ json: { sales: { orders: 1, total: 197000, overlaps: 0, omitted: 1 }, sections: { active: {
+      fetched_at: now, unmatched: 1, invalid: 0, excluded_unmatched: 1,
+      summary: { orders: 1, shipments: 0, rows: 1, missing_prices: 0, total: 197000 },
+      rows: [{ order_id: '1001', variant_id: '501', qty: 2, title: 'کالای رادن', ordered_at: now,
+        unit_price: 110000, total_price: 197000, company_name: 'رادن' }]
+    } } } });
+  });
+  await page.route('**/api/digikala/seller-packages?*', (route) => route.fulfill({ json: {
+    items: [{ id: '88', number: '321012', status: 'آماده تحویل', created_at: now }]
+  } }));
+  await page.route('**/api/digikala/seller-packages/88', (route) => route.fulfill({ json: {
+    items: [{ id: '1', title: 'کالای رادن', variant_id: '501', expected: 2, delivered: 0, company: 'رادن' }]
+  } }));
+
+  await signIn(page);
+  await page.locator('.metric[href="#/orders?period=today"]').click();
+  await expect(page.getByLabel('پلتفرم', { exact: true })).toHaveValue('1');
+  await expect(page.getByLabel('شرکت', { exact: true })).toHaveValue('10');
+  await expect(page.locator('#dk-orders-sales')).toContainText('۱۹٬۷۰۰ تومان');
+  await expect(page.locator('#dk-orders-sales')).toContainText('۱ ردیف در جمع نیامده است');
+  await expect(page.locator('#dk-orders-result .metric').last()).toContainText('۱۹٬۷۰۰ تومان');
+  await expect(page.locator('#dk-orders-result tbody tr')).toContainText('۱۱٬۰۰۰ تومان');
+  await expect(page.locator('#dk-orders-result tbody tr')).toContainText('۱۹٬۷۰۰ تومان');
+  await expect(page.locator('#dk-orders-result')).toContainText('هنوز به کالای شرکت وصل نیست');
+  expect(requests[0].searchParams.get('company')).toBe('10');
+  const { searchParams } = requests[0];
+  expect(searchParams.get('from')).toContain('20:30:00.000Z');
+  expect(Date.parse(searchParams.get('to')) - Date.parse(searchParams.get('from'))).toBe(86_400_000);
+  await page.locator('#dk-orders-packages summary').click();
+  await expect(page.locator('#dk-orders-packages')).toContainText('انتظار ۲ · تحویل ۰');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
+});
+
 test('enter an order with the keyboard; the live site price and the amount show up', async ({ page }, testInfo) => {
   laptopOnly(testInfo);
   await signIn(page);
@@ -133,7 +174,7 @@ test('import a Digikala CSV: map columns, link an unknown code, import', async (
   await expect(page.locator('[data-commit]')).toContainText('ثبت ۱ ردیف');
   await page.click('[data-commit]');
   await expect(page.locator('#s-preview')).toContainText('۱ سفارش و ۱ قلم ثبت شد');
-  await page.goto('/#/orders?q=880001');
+  await page.goto('/#/orders?view=internal&q=880001');
   await page.locator('#o-range [data-days="0"]').click();
   await expect(page.locator('#o-list tbody tr')).toHaveCount(1);
 });

@@ -10,6 +10,7 @@ const crypto = require('crypto');
 const { makeApp, addUser, client, shop, addCompany } = require('./helpers');
 const { createMockDigikala } = require('../../tools/mock-digikala');
 const { priceFor, variantIdOf, createMatcher } = require('../../server/lib/digikala');
+const { dayStart, tehranDay } = require('../../server/lib/jalali');
 
 const keys = crypto.generateKeyPairSync('rsa', { modulusLength: 2048, publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } });
 
@@ -35,6 +36,51 @@ async function setup(t, { band } = {}) {
 
 /** The formula price of the test listing (1 of 4 units, 30 %, rounded to 10 000 rials). */
 const formulaPrice = (product, regular = product.regular_price) => priceFor({ units: 1, margin_pct: 30, fixed_add: 0, round_to: 10000 }, { regular_price: regular, units_per_pack: 4 }).price;
+
+test('Digikala work list reads official prices and packages without counting internal or unknown rows', async t => {
+  const env = await setup(t);
+  const { api, dk, ctx, product } = env;
+  const company = product.company_id;
+  await connectAndList(env, { variant: { price_list: 10000, price_sale: 10000 } });
+  const from = dayStart(tehranDay(new Date().toISOString()).date);
+  const to = new Date(Date.parse(from) + 86_400_000).toISOString();
+  const active = { order_id: 1001, product_variant_id: 501, order_created_at: from, quantity: 2, selling_price: 110000, total_price: 197000 };
+  dk.orders.push(active, active, { ...active, order_id: 1002, total_price: undefined },
+    { ...active, order_id: 1003, product_variant_id: 9999 }, { ...active, order_id: 1004, order_created_at: to });
+  for (let i = 0; i < 50; i++) dk.orders.push({ ...active, order_id: 2001 + i, order_created_at: to });
+  dk.orders.push({ ...active, order_id: 1010, total_price: 0 });
+  const historical = { ...active, type: 'processed', shipment_id: 77, unit_price: 115000, total_price: 210000 };
+  dk.orderHistory.push(historical, { ...historical, shipment_id: 78 }, { ...historical, type: 'returned' },
+    { ...historical, order_id: 1011, shipment_id: 79, total_price: 100000 });
+  dk.packages.push({ package_id: 88, package_number: '987654321', created_at: from, status: { title: 'آماده تحویل' } },
+    { package_id: 89, created_at: to });
+  dk.packageItems.set(88, [{ package_products: [{ package_item_id: 1, dkpc: 501, ordered_count: 2, delivered_count: 0 }] }]);
+  dk.expireTokens();
+  const before = ctx.db.get('SELECT COUNT(*) AS n FROM orders').n;
+  const [rs, ps] = await Promise.all([
+    api.get(`/api/digikala/order-report?company=${company}`), api.get('/api/digikala/seller-packages')
+  ]);
+  assert.equal(rs.status, 200);
+  const { sections } = rs.body;
+  assert.deepEqual(sections.active.summary, { orders: 3, shipments: 0, rows: 3, missing_prices: 1, total: 197000 });
+  assert.equal(sections.active.unmatched, 1);
+  assert.equal(sections.active.rows[0].unit_price, 110000);
+  assert.equal(sections.processed.rows[0].unit_price, 115000);
+  assert.equal(sections.processed.summary.shipments, 3);
+  assert.equal(sections.processed.summary.total, 520000);
+  assert.equal(sections.returned.summary.total, 210000);
+  assert.deepEqual(rs.body.sales, { orders: 4, total: 100000, overlaps: 1, omitted: 5 });
+  assert.equal(dk.calls.filter(r => r.path === '/auth/refresh-token').length, 1);
+  assert.ok(dk.calls.some(r => r.path === '/orders' && r.query['search[created_today]'] === 'true' && r.query.page === '2'));
+  assert.ok(dk.calls.some(r => r.path === '/orders/history' && r.query.order_created_at_from === from && r.query.order_created_at_to === to));
+  assert.ok(dk.calls.some(r => r.path === '/packages' && r.query['search[type]'] === 'order_fulfilment'));
+  assert.deepEqual(ps.body.items.map(r => r.id), ['88']);
+  const detail = await api.get('/api/digikala/seller-packages/88');
+  assert.equal(detail.status, 200);
+  assert.equal(detail.body.items[0].expected, 2);
+  assert.equal(detail.body.items[0].delivered, 0);
+  assert.equal(ctx.db.get('SELECT COUNT(*) AS n FROM orders').n, before);
+});
 
 async function connectAndList(env, { margin = 30, units = 1, variant } = {}) {
   const { api, dk, product } = env;

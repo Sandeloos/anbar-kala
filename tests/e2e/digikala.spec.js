@@ -125,7 +125,7 @@ test('order list waits for an explicit date range and includes the entire final 
     requests.push(new URL(route.request().url()));
     await route.fulfill({ json: { items: [], total: 0, page: 1, pages: 1 } });
   });
-  await page.goto('/#/orders');
+  await page.goto('/#/orders?view=internal');
   await expect(page.locator('#o-range')).toContainText('انتخاب تاریخ');
   await expect(page.locator('#o-list')).toContainText('ابتدا تاریخ');
   expect(requests.length).toBe(0);

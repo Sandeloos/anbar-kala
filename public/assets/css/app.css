@@ -291,6 +291,19 @@ a.metric:hover { box-shadow: var(--shadow); transform: translateY(-2px); }
 .metric.tone-red .icon { background: var(--red-soft); color: var(--red); }
 .metric strong { font-size: 26px; font-weight: 800; color: var(--navy); line-height: 1.4; font-variant-numeric: tabular-nums; }
 .metric span { font-size: 13px; color: var(--muted); }
+.dk-order-filters { align-items: end; }
+.dk-order-filters .field:last-child { flex: 1 1 16rem; }
+.dk-order-sales { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 18px; }
+.dk-order-sales > p { flex-basis: 100%; }
+.dk-order-sales > strong { font-size: 22px; }
+.dk-order-metrics { margin: 0 0 14px; }
+.dk-order-metrics dt { color: var(--muted); font-size: 13px; }
+.dk-order-metrics dd { margin: 0; color: var(--navy); font-weight: 800; font-size: clamp(16px, 2vw, 24px); overflow-wrap: anywhere; }
+.dk-order-metrics .tone-green { background: var(--green-soft); }
+.dk-package { border-block-start: 1px solid var(--line-2); padding-block: 10px; }
+.dk-package summary { cursor: pointer; line-height: 2; }
+.dk-package summary > * { margin-inline-end: 8px; }
+.dk-package > p { margin-block: 8px; }
 
 /* ---------- Badges and states ---------- */
 .badge { display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px; border-radius: 99px; font-size: 12px; font-weight: 600; line-height: 1.9; white-space: nowrap; background: var(--line-2); color: var(--ink-2); }

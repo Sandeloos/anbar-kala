@@ -22,6 +22,8 @@ function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3
   const tickets = [];
   const orders = [];
   const orderHistory = [];
+  const packages = [];
+  const packageItems = new Map();
   const calls = [];
   const codes = new Set();
   const access = new Map(); // token → expiresAt
@@ -45,7 +47,7 @@ function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3
   function handle(req, res, body) {
     const url = new URL(req.url, 'http://x');
     const path = url.pathname.replace(/^\/open-api\/v1/, '');
-    calls.push({ method: req.method, path, body, userAgent: req.headers['user-agent'] || null });
+    calls.push({ method: req.method, path, body, query: Object.fromEntries(url.searchParams), userAgent: req.headers['user-agent'] || null });
     if (failNext.length) {
       const f = failNext.shift();
       if (f === 429) return send(res, 429, { status: 'error', message: 'rate limit', reset_time: 1 }, { 'retry-after': '0' });
@@ -74,6 +76,12 @@ function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3
       const page = Number(url.searchParams.get('page')) || 1;
       const size = Number(url.searchParams.get('size')) || 50;
       return ok(res, { items: all.slice((page - 1) * size, page * size), pager: { total_pages: Math.ceil(all.length / size) } });
+    }
+    if (req.method === 'GET' && (path === '/packages' || /^\/packages\/\d+$/.test(path))) {
+      const all = path === '/packages' ? packages : packageItems.get(Number(path.split('/').at(-1))) || [];
+      const page = Number(url.searchParams.get('page')) || 1;
+      const size = Math.min(10, Number(url.searchParams.get('size')) || 10);
+      return ok(res, { items: all.slice((page - 1) * size, page * size), pager: { item_per_page: size, total_pages: Math.ceil(all.length / size) } });
     }
     if (req.method === 'GET' && path === '/pricing/buybox/price-suggestion/winning-price') {
       const v = variants.get(Number(url.searchParams.get('product_variant_id')));
@@ -141,7 +149,7 @@ function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3
   }
 
   const api = {
-    variants, tickets, calls, userAgent, orders, orderHistory,
+    variants, tickets, calls, userAgent, orders, orderHistory, packages, packageItems,
     get url() { return base; },
     /** Adds a seller variant (prices in rials). */
     addVariant(v) {

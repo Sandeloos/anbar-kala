@@ -118,13 +118,18 @@ function createDigikalaClient({ baseUrl, tokens, fetchImpl, userAgent, timeoutMs
     });
   }
 
-  async function refresh() {
+  let refreshing;
+  async function refreshTokens() {
     const t = tokens.get();
     if (!t || !t.refresh) throw new DigikalaError('توکن دیجی‌کالا منقضی شده و توکن تازه‌سازی نیست؛ دوباره وصل شوید.', { code: 'no_token', status: 401 });
     const d = await once('POST', '/auth/refresh-token', { access_token: t.access, refresh_token: t.refresh }, { auth: false });
     const next = tokenPair(d);
     tokens.set(next);
     return next;
+  }
+  function refresh() {
+    if (!refreshing) refreshing = refreshTokens().finally(() => { refreshing = null; });
+    return refreshing;
   }
 
   /** One call with: token refresh on 401 (once), back-off on 429/5xx/network (honours reset time). */
@@ -133,10 +138,16 @@ function createDigikalaClient({ baseUrl, tokens, fetchImpl, userAgent, timeoutMs
     if (t && t.expiresAt && new Date(t.expiresAt).getTime() < Date.now() + 60e3) await refresh();
     let refreshed = false;
     for (let attempt = 0; ; attempt++) {
+      const access = tokens.get()?.access;
       try {
         return await once(method, path, body);
       } catch (err) {
-        if (err.status === 401 && !refreshed) { refreshed = true; await refresh(); attempt--; continue; }
+        if (err.status === 401 && !refreshed) {
+          refreshed = true;
+          if (tokens.get()?.access === access) await refresh();
+          attempt--;
+          continue;
+        }
         if (!err.retryable || attempt >= maxRetries) throw err;
         await sleep(err.retryAfter ? Math.min(60e3, err.retryAfter * 1000) : retryBaseMs * 2 ** attempt);
       }
@@ -180,7 +191,23 @@ function createDigikalaClient({ baseUrl, tokens, fetchImpl, userAgent, timeoutMs
     ticketsByIds,
     ticket: async (id) => (await ticketsByIds([id]))[0],
     buyboxSuggestion: (id) => call('GET', `/pricing/buybox/price-suggestion/winning-price?product_variant_id=${Number(id)}`),
-    orders: ({ page = 1, size = 50, type, from } = {}) => call('GET', type ? `/orders/history?page=${Number(page)}&size=${Number(size)}&order_type=${encodeURIComponent(type)}&order_created_at_from=${encodeURIComponent(from)}` : `/orders?page=${Number(page)}&size=${Number(size)}&sort=order_created_at&order=desc`)
+    orders({ page = 1, size = 50, type, from, to, today } = {}) {
+      const q = new URLSearchParams({ page, size, sort: type ? 'id' : 'order_created_at', order: 'desc' });
+      if (type) {
+        q.set('order_type', type);
+        if (from) q.set('order_created_at_from', from);
+        if (to) q.set('order_created_at_to', to);
+      } else if (today) q.set('search[created_today]', 'true');
+      return call('GET', `/orders${type ? '/history' : ''}?${q}`);
+    },
+    packages({ page, size, from, to }) {
+      const q = new URLSearchParams({ page, size, sort: 'created_at', order: 'desc',
+        'search[type]': 'order_fulfilment', 'search[package_created_at_from]': from, 'search[package_created_at_to]': to });
+      return call('GET', `/packages?${q}`);
+    },
+    packageDetails({ id, page, size }) {
+      return call('GET', `/packages/${id}?${new URLSearchParams({ page, size })}`);
+    }
   };
 }
 

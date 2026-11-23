@@ -1,10 +1,11 @@
 import { $, esc, toast } from './ui.js';
 import { jalaliToday, toIso } from './jalali.js';
 
-export function orderDateRange(view, { prefix = 'order-range', from = '', to = '', onApply }) {
+export function orderDateRange(view, { prefix = 'order-range', from = '', to = '', onApply, defaultToday = false }) {
   const host = document.createElement('section');
   host.className = 'card';
-  host.innerHTML = `<h2>انتخاب تاریخ سفارش‌ها</h2><p class="small muted">ابتدا بازه را مشخص کنید، سپس سفارش‌ها را ببینید.</p>
+  host.innerHTML = `<h2>${defaultToday ? 'بازهٔ گزارش' : 'انتخاب تاریخ سفارش‌ها'}</h2>
+    <p class="small muted">${defaultToday ? 'پیش‌فرض امروز به وقت تهران است.' : 'ابتدا بازه را مشخص کنید، سپس سفارش‌ها را ببینید.'}</p>
     <form class="form" novalidate><div class="form-row cols-2">
     <div class="field"><label for="${prefix}-from">از تاریخ</label><input id="${prefix}-from" inputmode="numeric" dir="ltr" placeholder="۱۴۰۵/۰۸/۲۷" value="${esc(from)}"></div>
     <div class="field"><label for="${prefix}-to">تا تاریخ (شامل این روز)</label><input id="${prefix}-to" inputmode="numeric" dir="ltr" placeholder="۱۴۰۵/۰۸/۲۷" value="${esc(to)}"></div></div>
@@ -14,8 +15,9 @@ export function orderDateRange(view, { prefix = 'order-range', from = '', to = '
     const fromDate = $(`#${prefix}-from`, host).value;
     const toDate = $(`#${prefix}-to`, host).value;
     const start = toIso(fromDate, '0'), end = toIso(toDate, '0');
-    if (!start || !end || start > end) { toast('بازهٔ تاریخ معتبر وارد کنید؛ تاریخ پایان نباید قبل از شروع باشد.', { error: true }); return; }
+    if (!start || !end || start > end) { toast('بازهٔ تاریخ معتبر وارد کنید؛ تاریخ پایان نباید قبل از شروع باشد.', { error: true }); return false; }
     onApply({ from: start, to: new Date(Date.parse(end) + 864e5).toISOString(), from_date: fromDate, to_date: toDate });
+    return true;
   };
   $('form', host).onsubmit = (e) => { e.preventDefault(); e.stopPropagation(); apply(); };
   host.onclick = (e) => {
