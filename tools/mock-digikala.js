@@ -75,10 +75,17 @@ function createMockDigikala({ publicKey = null, band = 0.2, accessTtlMs = 3600e3
       const all = path === '/orders' ? orders : orderHistory.filter((o) => o.type === url.searchParams.get('order_type'));
       const page = Number(url.searchParams.get('page')) || 1;
       const size = Number(url.searchParams.get('size')) || 50;
-      return ok(res, { items: all.slice((page - 1) * size, page * size), pager: { total_pages: Math.ceil(all.length / size) } });
+      const data = { items: all.slice((page - 1) * size, page * size), pager: { total_pages: Math.ceil(all.length / size) } };
+      if (path === '/orders/history' && page > 1 && api.historyPageDelayMs) {
+        return setTimeout(() => ok(res, data), api.historyPageDelayMs);
+      }
+      return ok(res, data);
     }
     if (req.method === 'GET' && (path === '/packages' || /^\/packages\/\d+$/.test(path))) {
       const all = path === '/packages' ? packages : packageItems.get(Number(path.split('/').at(-1))) || [];
+      if (Array.isArray(all.package_products)) {
+        return ok(res, { items: all, pager: { total_pages: 1, total_rows: all.package_products.length } });
+      }
       const page = Number(url.searchParams.get('page')) || 1;
       const size = Math.min(10, Number(url.searchParams.get('size')) || 10);
       return ok(res, { items: all.slice((page - 1) * size, page * size), pager: { item_per_page: size, total_pages: Math.ceil(all.length / size) } });

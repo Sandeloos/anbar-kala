@@ -54,7 +54,7 @@ test('Digikala work list reads official prices and packages without counting int
     { ...historical, order_id: 1011, shipment_id: 79, total_price: 100000 });
   dk.packages.push({ package_id: 88, package_number: '987654321', created_at: from, status: { title: 'آماده تحویل' } },
     { package_id: 89, created_at: to });
-  dk.packageItems.set(88, [{ package_products: [{ package_item_id: 1, dkpc: 501, ordered_count: 2, delivered_count: 0 }] }]);
+  dk.packageItems.set(88, { package_products: [{ package_item_id: 1, dkpc: 501, ordered_count: 2, delivered_count: 0 }] });
   dk.expireTokens();
   const before = ctx.db.get('SELECT COUNT(*) AS n FROM orders').n;
   const [rs, ps] = await Promise.all([
@@ -80,6 +80,30 @@ test('Digikala work list reads official prices and packages without counting int
   assert.equal(detail.body.items[0].expected, 2);
   assert.equal(detail.body.items[0].delivered, 0);
   assert.equal(ctx.db.get('SELECT COUNT(*) AS n FROM orders').n, before);
+});
+
+test('Digikala publishes history progress and calculates combined sales only after the last page', async t => {
+  const env = await setup(t);
+  const { api, dk } = env;
+  await connectAndList(env, { variant: { price_list: 10000, price_sale: 10000 } });
+  const now = new Date().toISOString();
+  for (let i = 0; i < 51; i++) dk.orderHistory.push({ order_id: i + 1000, type: 'processed', product_variant_id: 501,
+    shipment_id: i + 100, order_created_at: now, quantity: 1, unit_price: 10000, total_price: 10000 });
+  dk.historyPageDelayMs = 250;
+  const query = '/api/digikala/order-report?section=sales';
+  const initial = (await api.get(query)).body;
+  assert.deepEqual(initial.sections.processed.progress, { pages: 1, total: 2, complete: false, error: null });
+  assert.equal(initial.sections.processed.summary.rows, 50);
+  assert.equal(initial.sales, null);
+  let report;
+  for (let i = 0; i < 20; i++) {
+    report = (await api.get(query)).body;
+    if (report.sales) break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.equal(report.sections.processed.progress.complete, true);
+  assert.equal(report.sales.total, 510000);
+  assert.equal(dk.calls.filter(call => call.path === '/orders/history').length, 2);
 });
 
 async function connectAndList(env, { margin = 30, units = 1, variant } = {}) {

@@ -207,8 +207,14 @@ function createDigikalaClient({ baseUrl, tokens, fetchImpl, userAgent, timeoutMs
         'search[type]': 'order_fulfilment', 'search[package_created_at_from]': from, 'search[package_created_at_to]': to });
       return call('GET', `/packages?${q}`, undefined, retries, signal);
     },
-    packageDetails({ id, page, signal }) {
-      return call('GET', page === 1 ? `/packages/${id}` : `/packages/${id}?page=${page}`, undefined, retries, signal);
+    async packageDetails({ id, page, signal }) {
+      const result = await call('GET', page === 1 ? `/packages/${id}` : `/packages/${id}?page=${page}`, undefined, retries, signal);
+      // In production the detail endpoint wraps the products in an object.
+      const products = result?.items?.package_products;
+      if (!products || typeof products !== 'object') return result;
+      const rows = Array.isArray(products) ? products : Object.values(products);
+      if (!rows.every(row => row && typeof row === 'object' && ('package_item_id' in row || 'dkpc' in row))) return result;
+      return { ...result, items: [{ package_products: rows }] };
     }
   };
 }

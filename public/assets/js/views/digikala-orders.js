@@ -22,6 +22,8 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
   let ordersRequest = 0;
   let salesRequest = 0;
   let packageRequest = 0;
+  let ordersPoll;
+  let salesPoll;
 
   view.innerHTML = `
     <div class="page-head"><div><h1>سفارش‌های دیجیکالا</h1><p>زمان سفارش‌ها به وقت تهران است. مبلغ فروش از پاسخ پنل فروشندگان خوانده می‌شود.</p></div>
@@ -57,6 +59,8 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
 
   const updateUrl = () => ctx.setQuery({ platform: platform.id, company, q: query,
     status: selected === 'active' ? '' : selected, from_date: range.from_date, to_date: range.to_date });
+  const progressing = (p) => p && !p.complete && !p.error;
+  const progressLabel = (p) => `${fa(p.pages)}${p.total !== null ? ` از ${fa(p.total)}` : ''} صفحه خوانده شد.`;
 
   function paintOrders() {
     const data = report?.sections[selected];
@@ -65,7 +69,9 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
     const s = data.summary;
     const pageCount = Math.max(1, Math.ceil(s.rows / PAGE_SIZE));
     page = Math.min(page, pageCount - 1);
-    const partial = s.missing_prices || data.invalid || data.excluded_unmatched;
+    const progress = data.progress;
+    const incomplete = progress && !progress.complete;
+    const partial = s.missing_prices || data.invalid || data.excluded_unmatched || incomplete;
     const label = selected === 'returned' || selected === 'canceled' ? 'جمع ارزش این وضعیت' : 'جمع مبلغ فروش این وضعیت';
     const hints = [
       s.missing_prices ? `${fa(s.missing_prices)} ردیف مبلغ کل ندارد و در جمع منظور نشده است.` : '',
@@ -75,6 +81,8 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
     result.innerHTML = `
       <div class="card-head"><div><h2>سفارش‌های ${SECTIONS[selected]}</h2>
         <p>خوانده‌شده از دیجیکالا ${WHEN(data.fetched_at)}</p></div></div>
+      ${incomplete ? `<p class="callout ${progress.error ? 'callout-warn' : 'callout-info'}">${progressLabel(progress)}
+        ${progress.error ? esc(progress.error) : 'بقیهٔ تاریخچه در حال خواندن است.'}</p>` : ''}
       <dl class="metrics dk-order-metrics">
         <div class="metric"><dt>سفارش</dt><dd>${fa(s.orders)}</dd></div>
         <div class="metric"><dt>ردیف کالا</dt><dd>${fa(s.rows)}</dd></div>
@@ -98,7 +106,7 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
         ${pageCount > 1 ? `<div class="table-foot"><span>صفحهٔ ${fa(page + 1)} از ${fa(pageCount)}</span><div class="pager">
           <button type="button" class="btn btn-sm" data-order-page="-1"${page === 0 ? ' disabled' : ''}>قبلی</button>
           <button type="button" class="btn btn-sm" data-order-page="1"${page + 1 >= pageCount ? ' disabled' : ''}>بعدی</button></div></div>` : ''}
-        ` : empty('box', 'سفارشی با این فیلترها پیدا نشد')}
+        ` : empty('box', incomplete ? 'در صفحه‌های خوانده‌شده هنوز سفارشی با این فیلترها پیدا نشده' : 'سفارشی با این فیلترها پیدا نشد')}
       <p class="small muted">مبلغ ردیف شامل تعدیل‌های اعلام‌شده در پاسخ دیجیکالاست. جمع هر وضعیت جداست.</p>`;
   }
 
@@ -106,23 +114,28 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
     from: range.from, to: range.to, company: company === 'all' ? '' : company, q: query, section
   });
 
-  async function loadOrders() {
+  async function loadOrders(quiet = false) {
+    clearTimeout(ordersPoll);
     const id = ++ordersRequest;
-    report = null;
-    result.innerHTML = skeleton(4);
+    if (!quiet) {
+      report = null;
+      result.innerHTML = skeleton(4);
+    }
     try {
       const data = await get('/digikala/order-report', queryFor(selected));
       if (id !== ordersRequest) return;
       report = data;
       paintOrders();
+      if (progressing(data.sections[selected]?.progress)) ordersPoll = setTimeout(() => loadOrders(true), 7000);
     } catch (err) {
       if (id === ordersRequest) result.innerHTML = errorBox(err.message);
     }
   }
 
-  async function loadSales() {
+  async function loadSales(quiet = false) {
+    clearTimeout(salesPoll);
     const id = ++salesRequest;
-    salesBox.innerHTML = '<p class="small muted">در حال خواندن جمع سفارش‌های فعال و پردازش‌شده…</p>';
+    if (!quiet) salesBox.innerHTML = '<p class="small muted">در حال خواندن جمع سفارش‌های فعال و پردازش‌شده…</p>';
     try {
       const data = await get('/digikala/order-report', queryFor('sales'));
       if (id !== salesRequest) return;
@@ -134,6 +147,11 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
         ${sales.omitted ? `<p class="small muted">${fa(sales.omitted)} ردیف در جمع نیامده است.${sales.overlaps
           ? ` ${fa(sales.overlaps)} ترکیب سفارش و تنوع در هر دو وضعیت دیده شد و برای جلوگیری از شمارش دوباره کنار گذاشته شد.` : ''}</p>` : ''}
       </section>` : '<p class="small muted">جمع فعال و پردازش‌شده در دسترس نیست. مبلغ هر وضعیت را جداگانه ببینید.</p>';
+      const progress = data.sections.processed?.progress;
+      if (progressing(progress) && !data.sections.active?.error) {
+        salesBox.innerHTML = `<p class="small muted">${progressLabel(progress)} جمع فعال و پردازش‌شده پس از خواندن کامل تاریخچه نمایش داده می‌شود.</p>`;
+        salesPoll = setTimeout(() => loadSales(true), 7000);
+      }
     } catch (err) {
       if (id === salesRequest) salesBox.innerHTML = errorBox(err.message);
     }
@@ -217,5 +235,5 @@ export function renderDigikalaOrders(view, ctx, { platforms, companies, platform
       paintOrders();
     }
   });
-  return () => { ordersRequest++; salesRequest++; packageRequest++; };
+  return () => { ordersRequest++; salesRequest++; packageRequest++; clearTimeout(ordersPoll); clearTimeout(salesPoll); };
 }

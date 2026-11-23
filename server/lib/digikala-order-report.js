@@ -5,6 +5,8 @@ const { badRequest, conflict, searchKey } = require('./util');
 
 const DAY = 86_400_000;
 const PAGE_SIZE = 50;
+const MAX_PAGES = 200;
+const HISTORY_CACHE_MS = 12 * 60_000;
 const ORDER_SECTIONS = ['active', 'processed', 'returned', 'canceled'];
 const iso = (value) => typeof value === 'string' && /(?:Z|[+-]\d{2}:\d{2})$/.test(value) && Number.isFinite(Date.parse(value))
   ? new Date(value).toISOString() : null;
@@ -31,17 +33,22 @@ function reportRange(from, to, now = new Date()) {
   return range;
 }
 
+function pageOf(result, page) {
+  if (!Array.isArray(result?.items)) throw new Error('Invalid Digikala list');
+  const total = number(result.pager?.total_pages);
+  const per = number(result.pager?.item_per_page) || PAGE_SIZE;
+  const complete = total !== null ? page >= total : result.items.length < per;
+  if (!complete && !result.items.length) throw new Error('Incomplete Digikala pagination');
+  return { items: result.items, total, complete };
+}
+
 async function paged(fetchPage) {
   const items = [];
   const signal = AbortSignal.timeout(25_000);
-  for (let page = 1; page <= 200; page++) {
-    const result = await fetchPage(page, signal);
-    if (!Array.isArray(result?.items)) throw new Error('Invalid Digikala list');
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const result = pageOf(await fetchPage(page, signal), page);
     items.push(...result.items);
-    const pages = number(result.pager?.total_pages);
-    const per = number(result.pager?.item_per_page) || PAGE_SIZE;
-    if (pages !== null ? page >= pages : result.items.length < per) return items;
-    if (!result.items.length) throw new Error('Incomplete Digikala pagination');
+    if (result.complete) return items;
   }
   throw new Error('Digikala pagination limit reached');
 }
@@ -90,7 +97,7 @@ function errorFor(err) {
 }
 
 function salesSummary({ active, processed }) {
-  if (active.error || processed.error) return null;
+  if (active.error || processed.error || (processed.progress && !processed.progress.complete)) return null;
   const key = row => `${row.order_id}:${row.variant_id}`;
   const activeKeys = new Set(active.rows.map(key));
   const contested = new Set(processed.rows.map(key).filter(id => activeKeys.has(id)));
@@ -106,8 +113,9 @@ function salesSummary({ active, processed }) {
 
 function createOrderReport({ db, client, connection, variantIdOf, log }) {
   const cache = new Map();
+  let historyScans = 0;
 
-  function read(key, fetch) {
+  function read(key, fetch, lifetime) {
     const c = connection();
     if (!c.access_token_enc) throw conflict('ابتدا اتصال حساب فروشندگی دیجیکالا را برقرار کنید.');
     if (process.env.NODE_ENV === 'production' && !/^https:\/\/seller\.digikala\.com\/?$/i.test(c.base_url)) {
@@ -117,21 +125,70 @@ function createOrderReport({ db, client, connection, variantIdOf, log }) {
     const cacheKey = JSON.stringify([c.base_url, c.client_code, c.connected_at, key]);
     for (const [k, entry] of cache) if (entry.expires <= now) cache.delete(k);
     const existing = cache.get(cacheKey);
-    if (existing) return existing.promise;
+    if (existing && !(existing.result?.progress?.retry_at <= now)) return existing.promise;
+    if (existing) cache.delete(cacheKey);
     const entry = { expires: Infinity };
-    entry.promise = fetch(client()).finally(() => { entry.expires = Date.now() + 30_000; });
+    entry.promise = fetch(client()).then(result => {
+      entry.result = result;
+      entry.expires = Date.now() + lifetime;
+      return result;
+    }, error => {
+      entry.expires = Date.now() + 30_000;
+      throw error;
+    });
     if (cache.size < 48) cache.set(cacheKey, entry);
     return entry.promise;
   }
 
-  async function section(key, fetch) {
-    try { return await read(key, fetch); }
+  async function section(key, fetch, lifetime = 30_000) {
+    try { return await read(key, fetch, lifetime); }
     catch (err) {
       if (err.statusCode === 409) return { error: err.message };
       log?.warn({ source: key[0], upstreamStatus: err.status, upstreamCode: err.code,
         validationFields: Object.keys(err.errors || {}) }, 'Could not read Digikala order report');
       return { error: errorFor(err) };
     }
+  }
+
+  async function history(api, kind, window) {
+    if (historyScans >= 3) throw conflict('چند بخش تاریخچه در حال خواندن است. کمی بعد دوباره تلاش کنید.');
+    historyScans++;
+    const request = (page, signal) => api.orders({ page, size: PAGE_SIZE, signal,
+      type: kind, from: window.from, to: window.to });
+    let state;
+    try {
+      const first = pageOf(await request(1, AbortSignal.timeout(25_000)), 1);
+      state = { raw: first.items.slice(), fetched_at: new Date().toISOString(),
+        progress: { pages: 1, total: first.total, complete: first.complete, error: null } };
+    } catch (error) {
+      historyScans--;
+      throw error;
+    }
+    if (state.progress.complete) {
+      historyScans--;
+      return state;
+    }
+    void (async () => {
+      const signal = AbortSignal.timeout(10 * 60_000);
+      try {
+        for (let page = 2; page <= MAX_PAGES; page++) {
+          const next = pageOf(await request(page, signal), page);
+          state.raw.push(...next.items);
+          state.fetched_at = new Date().toISOString();
+          state.progress = { pages: page, total: next.total, complete: next.complete, error: null };
+          if (next.complete) return;
+        }
+        throw new Error('Digikala history pagination limit reached');
+      } catch (error) {
+        state.progress.error = errorFor(error);
+        state.progress.retry_at = Date.now() + 30_000;
+        log?.warn({ source: kind, pages: state.progress.pages, upstreamStatus: error.status,
+          upstreamCode: error.code }, 'Digikala history scan stopped');
+      } finally {
+        historyScans--;
+      }
+    })();
+    return state;
   }
 
   function listings() {
@@ -153,13 +210,15 @@ function createOrderReport({ db, client, connection, variantIdOf, log }) {
   async function orders({ from, to, company, q, section: requested }) {
     const window = reportRange(from, to);
     const kinds = requested === 'sales' ? ['active', 'processed'] : requested ? [requested] : ORDER_SECTIONS;
-    const responses = await Promise.all(kinds.map(kind => section([kind, window.from, window.to], async api => {
+    const responses = await Promise.all(kinds.map(kind => {
+      const key = [kind, window.from, window.to];
+      if (kind !== 'active') return section(key, api => history(api, kind, window), HISTORY_CACHE_MS);
       // The vendor's created_today filter omitted confirmed active orders in production.
-      // Apply the same Tehran interval to the actual timestamps returned by the API.
-      const raw = await paged((page, signal) => api.orders({ page, size: PAGE_SIZE, signal,
-        ...(kind === 'active' ? {} : { type: kind, from: window.from, to: window.to }) }));
-      return { ...uniqueOrderLines(raw, kind, window), fetched_at: new Date().toISOString() };
-    })));
+      return section(key, async api => ({
+        raw: await paged((page, signal) => api.orders({ page, size: PAGE_SIZE, signal })),
+        fetched_at: new Date().toISOString()
+      }));
+    }));
     const mapped = listings();
     const local = new Map(db.all(`SELECT id, order_number FROM orders WHERE source='digikala'
       AND ordered_at>=? AND ordered_at<?`, window.from, window.to).map(row => [row.order_number, row.id]));
@@ -167,7 +226,9 @@ function createOrderReport({ db, client, connection, variantIdOf, log }) {
     const sections = Object.fromEntries(kinds.map((kind, i) => {
       const response = responses[i];
       if (response.error) return [kind, response];
-      const matching = response.rows.filter(row => !term || searchKey(`${row.order_id} ${row.variant_id} ${row.shipment_id || ''} ${row.code || ''} ${row.title || ''}`).includes(term));
+      const { rows: remoteRows, invalid } = uniqueOrderLines(response.raw, kind, window);
+      const progress = response.progress ? { ...response.progress } : null;
+      const matching = remoteRows.filter(row => !term || searchKey(`${row.order_id} ${row.variant_id} ${row.shipment_id || ''} ${row.code || ''} ${row.title || ''}`).includes(term));
       const rows = matching.flatMap(row => {
         const match = mapped.get(row.variant_id);
         if (company && match?.company_id !== company) return [];
@@ -176,12 +237,13 @@ function createOrderReport({ db, client, connection, variantIdOf, log }) {
       const known = rows.filter(row => row.total_price !== null);
       const unmatched = matching.filter(row => !mapped.get(row.variant_id)).length;
       const excluded = company ? unmatched : 0;
-      return [kind, { rows, fetched_at: response.fetched_at, invalid: response.invalid,
+      return [kind, { rows, fetched_at: response.fetched_at, invalid, progress,
         unmatched, excluded_unmatched: excluded,
         summary: { orders: new Set(rows.map(row => row.order_id)).size,
           shipments: new Set(rows.map(row => row.shipment_id).filter(Boolean)).size,
           rows: rows.length, missing_prices: rows.length - known.length,
-          total: known.length || !(rows.length || excluded || response.invalid) ? known.reduce((sum, row) => sum + row.total_price, 0) : null } }];
+          total: known.length || !(rows.length || excluded || invalid || (progress && !progress.complete))
+            ? known.reduce((sum, row) => sum + row.total_price, 0) : null } }];
     }));
     return { window, sections, sales: sections.active && sections.processed ? salesSummary(sections) : null };
   }
